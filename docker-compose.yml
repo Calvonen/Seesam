@@ -1,0 +1,10 @@
+services:
+  seesam-core:
+    image: python:3.12-slim
+    container_name: seesam-core
+    working_dir: /app
+    volumes:
+      - ./core:/app
+      - ./data:/data
+    command: sleep infinity
+    restart: unless-stopped

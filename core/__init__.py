@@ -1,0 +1,1 @@
+"""Seesam core package."""

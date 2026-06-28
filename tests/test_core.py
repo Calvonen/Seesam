@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from core.brain import Brain, load_personality
+from core.brain import Brain, MEMORY_PATH, load_personality
 from core.commands import handle_local_command
 from core.memory import Memory
 
@@ -48,7 +48,7 @@ def test_command_helper_is_case_insensitive():
 
 
 def test_memory_load_ignores_empty_lines_and_append_saves_line(tmp_path):
-    memory_path = tmp_path / "memory" / "marko.txt"
+    memory_path = tmp_path / "memory" / "marko.local.txt"
     memory_path.parent.mkdir()
     memory_path.write_text("ensimmäinen\n\n   \ntoinen  \n", encoding="utf-8")
     memory = Memory(memory_path)
@@ -62,9 +62,26 @@ def test_memory_load_ignores_empty_lines_and_append_saves_line(tmp_path):
     assert memory.load() == ["ensimmäinen", "toinen", "kolmas muisto"]
 
 
+def test_memory_append_creates_missing_file_and_parent_directory(tmp_path):
+    memory_path = tmp_path / "missing" / "memory" / "marko.local.txt"
+    memory = Memory(memory_path)
+
+    assert memory_path.exists() is False
+
+    assert memory.append("uusi muisto") is True
+
+    assert memory_path.read_text(encoding="utf-8") == "uusi muisto\n"
+    assert memory.load() == ["uusi muisto"]
+
+
+def test_default_memory_path_uses_untracked_local_file():
+    assert MEMORY_PATH.name == "marko.local.txt"
+    assert MEMORY_PATH.parent.name == "memory"
+
+
 def test_memory_command_saves_memory_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä: Marko pitää kahvista")
@@ -76,7 +93,7 @@ def test_memory_command_saves_memory_without_ollama(tmp_path):
 
 def test_memory_command_accepts_no_space_after_colon_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä:Marko pitää teestä")
@@ -88,7 +105,7 @@ def test_memory_command_accepts_no_space_after_colon_without_ollama(tmp_path):
 
 def test_memory_command_accepts_tama_typo_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tama : Marko pitää pullasta")
@@ -100,7 +117,7 @@ def test_memory_command_accepts_tama_typo_without_ollama(tmp_path):
 
 def test_memory_command_accepts_tama_umlaut_typo_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tamä:Marko pitää korvapuusteista")
@@ -112,7 +129,7 @@ def test_memory_command_accepts_tama_umlaut_typo_without_ollama(tmp_path):
 
 def test_memory_command_is_case_insensitive_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("MUISTA TÄMÄ: Marko pitää kahvista")
@@ -124,7 +141,7 @@ def test_memory_command_is_case_insensitive_without_ollama(tmp_path):
 
 def test_empty_memory_command_returns_finnish_error_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä:   ")
@@ -137,7 +154,7 @@ def test_empty_memory_command_returns_finnish_error_without_ollama(tmp_path):
 
 def test_memory_list_command_returns_saved_memories_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     memory.append("Marko pitää kahvista")
     memory.append("Markon koira on Tessu")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
@@ -150,7 +167,7 @@ def test_memory_list_command_returns_saved_memories_without_ollama(tmp_path):
 
 def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     memory.append("Marko pitää teestä")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
@@ -162,7 +179,7 @@ def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path)
 
 def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("mitä muistat")
@@ -170,9 +187,10 @@ def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
     assert answer == "Muistissa ei ole vielä mitään."
     assert client.calls == []
 
+
 def test_non_local_input_includes_memory_context(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     memory.append("Marko pitää kahvista")
     brain = Brain(client=client, personality="vastaa suomeksi", memory=memory)
 
@@ -191,7 +209,7 @@ def test_non_local_input_includes_memory_context(tmp_path):
 
 def test_system_context_omits_memory_instructions_when_memory_is_empty(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.txt")
+    memory = Memory(tmp_path / "marko.local.txt")
     brain = Brain(client=client, personality="vastaa suomeksi", memory=memory)
 
     assert brain._system_context() == "vastaa suomeksi"

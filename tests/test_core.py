@@ -134,6 +134,42 @@ def test_empty_memory_command_returns_finnish_error_without_ollama(tmp_path):
     assert client.calls == []
 
 
+
+def test_memory_list_command_returns_saved_memories_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.txt")
+    memory.append("Marko pitää kahvista")
+    memory.append("Markon koira on Tessu")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("mitä muistat")
+
+    assert answer == "- Marko pitää kahvista\n- Markon koira on Tessu"
+    assert client.calls == []
+
+
+def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.txt")
+    memory.append("Marko pitää teestä")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("näytä muisti")
+
+    assert answer == "- Marko pitää teestä"
+    assert client.calls == []
+
+
+def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.txt")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("mitä muistat")
+
+    assert answer == "Muistissa ei ole vielä mitään."
+    assert client.calls == []
+
 def test_non_local_input_includes_memory_context(tmp_path):
     client = FakeOllamaClient()
     memory = Memory(tmp_path / "marko.txt")
@@ -143,4 +179,19 @@ def test_non_local_input_includes_memory_context(tmp_path):
     answer = brain.respond("moro")
 
     assert answer == "Moro Marko!"
-    assert client.calls == [("moro", "vastaa suomeksi\n\nMuistettavaa Markosta:\n- Marko pitää kahvista")]
+    assert client.calls == [("moro", brain._system_context())]
+    system_context = client.calls[0][1]
+    assert system_context.startswith("vastaa suomeksi")
+    assert "Sinulla on käytössäsi paikallinen muisti Markosta" in system_context
+    assert "sinun täytyy käyttää muistia vastauksessa" in system_context
+    assert "vastaa lyhyesti muistin perusteella" in system_context
+    assert "Älä vastaa pelkällä tervehdyksellä" in system_context
+    assert "Muistettavaa Markosta:\n- Marko pitää kahvista" in system_context
+
+
+def test_system_context_omits_memory_instructions_when_memory_is_empty(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.txt")
+    brain = Brain(client=client, personality="vastaa suomeksi", memory=memory)
+
+    assert brain._system_context() == "vastaa suomeksi"

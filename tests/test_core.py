@@ -1,7 +1,7 @@
 from pathlib import Path
 
+from core.brain import Brain, load_personality
 from core.commands import handle_local_command
-from core.main import load_personality, respond
 
 
 class FakeOllamaClient:
@@ -15,8 +15,9 @@ class FakeOllamaClient:
 
 def test_wake_command_returns_local_response_without_ollama():
     client = FakeOllamaClient()
+    brain = Brain(client=client, personality="persoonallisuus")
 
-    answer = respond("Hei seesam aukene nyt", client, "persoonallisuus")
+    answer = brain.respond("Hei seesam aukene nyt")
 
     assert answer == "Kuuntelen."
     assert client.calls == []
@@ -24,8 +25,9 @@ def test_wake_command_returns_local_response_without_ollama():
 
 def test_non_local_input_goes_to_ollama():
     client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
 
-    answer = respond("moro", client, "vastaa suomeksi")
+    answer = brain.respond("moro")
 
     assert answer == "Moro Marko!"
     assert client.calls == [("moro", "vastaa suomeksi")]

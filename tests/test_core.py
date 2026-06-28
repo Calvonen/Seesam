@@ -69,7 +69,7 @@ def test_memory_command_saves_memory_without_ollama(tmp_path):
 
     answer = brain.respond("muista tämä: Marko pitää kahvista")
 
-    assert answer == "Muistin tämän."
+    assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää kahvista"]
     assert client.calls == []
 
@@ -81,7 +81,7 @@ def test_memory_command_accepts_no_space_after_colon_without_ollama(tmp_path):
 
     answer = brain.respond("muista tämä:Marko pitää teestä")
 
-    assert answer == "Muistin tämän."
+    assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää teestä"]
     assert client.calls == []
 
@@ -93,7 +93,7 @@ def test_memory_command_accepts_tama_typo_without_ollama(tmp_path):
 
     answer = brain.respond("muista tama : Marko pitää pullasta")
 
-    assert answer == "Muistin tämän."
+    assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää pullasta"]
     assert client.calls == []
 
@@ -105,7 +105,7 @@ def test_memory_command_accepts_tama_umlaut_typo_without_ollama(tmp_path):
 
     answer = brain.respond("muista tamä:Marko pitää korvapuusteista")
 
-    assert answer == "Muistin tämän."
+    assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää korvapuusteista"]
     assert client.calls == []
 
@@ -117,7 +117,7 @@ def test_memory_command_is_case_insensitive_without_ollama(tmp_path):
 
     answer = brain.respond("MUISTA TÄMÄ: Marko pitää kahvista")
 
-    assert answer == "Muistin tämän."
+    assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää kahvista"]
     assert client.calls == []
 

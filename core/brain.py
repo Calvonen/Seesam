@@ -16,7 +16,7 @@ PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 ENV_PATH = PROJECT_ROOT / ".env"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
-MEMORY_RESPONSE = "Muistin tämän."
+MEMORY_RESPONSE = "Muistan tämän."
 EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 
 

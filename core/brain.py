@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,8 +15,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 ENV_PATH = PROJECT_ROOT / ".env"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.txt"
-MEMORY_COMMAND_PREFIX = "muista tämä: "
+MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
 MEMORY_RESPONSE = "Muistin tämän."
+EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 
 
 def load_env_file(path: Path = ENV_PATH) -> None:
@@ -76,12 +78,16 @@ class Brain:
 
     def _handle_memory_command(self, user_input: str) -> str | None:
         """Save memory from a local command when requested."""
-        stripped = user_input.strip()
-        if not stripped.casefold().startswith(MEMORY_COMMAND_PREFIX):
+        match = MEMORY_COMMAND_PATTERN.match(user_input)
+        if match is None:
             return None
 
+        memory_text = match.group(1).strip()
+        if not memory_text:
+            return EMPTY_MEMORY_RESPONSE
+
         if self.memory is not None:
-            self.memory.append(stripped[len(MEMORY_COMMAND_PREFIX) :])
+            self.memory.append(memory_text)
 
         return MEMORY_RESPONSE
 

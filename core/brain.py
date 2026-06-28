@@ -7,11 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.commands import handle_local_command
+from core.memory import Memory
 from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, OllamaError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 ENV_PATH = PROJECT_ROOT / ".env"
+MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.txt"
+MEMORY_COMMAND_PREFIX = "muista tämä: "
+MEMORY_RESPONSE = "Muistin tämän."
 
 
 def load_env_file(path: Path = ENV_PATH) -> None:
@@ -47,20 +51,47 @@ class Brain:
 
     client: OllamaClient
     personality: str
+    memory: Memory | None = None
 
     @classmethod
     def from_environment(cls) -> "Brain":
         """Create the assistant brain from local configuration files and env vars."""
         load_env_file()
-        return cls(client=build_client(), personality=load_personality())
+        return cls(client=build_client(), personality=load_personality(), memory=Memory(MEMORY_PATH))
 
     def respond(self, user_input: str) -> str:
         """Return Seesam's response to one terminal-chat input."""
+        memory_response = self._handle_memory_command(user_input)
+        if memory_response is not None:
+            return memory_response
+
         local_response = handle_local_command(user_input)
         if local_response is not None:
             return local_response
 
         try:
-            return self.client.generate(user_input, self.personality)
+            return self.client.generate(user_input, self._system_context())
         except OllamaError as exc:
             return str(exc)
+
+    def _handle_memory_command(self, user_input: str) -> str | None:
+        """Save memory from a local command when requested."""
+        stripped = user_input.strip()
+        if not stripped.casefold().startswith(MEMORY_COMMAND_PREFIX):
+            return None
+
+        if self.memory is not None:
+            self.memory.append(stripped[len(MEMORY_COMMAND_PREFIX) :])
+
+        return MEMORY_RESPONSE
+
+    def _system_context(self) -> str:
+        """Return the personality prompt enriched with local memories."""
+        if self.memory is None:
+            return self.personality
+
+        memories = self.memory.text()
+        if not memories:
+            return self.personality
+
+        return f"{self.personality}\n\nMuistettavaa Markosta:\n{memories}"

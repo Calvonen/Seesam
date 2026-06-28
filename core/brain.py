@@ -16,8 +16,10 @@ PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 ENV_PATH = PROJECT_ROOT / ".env"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
+MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti)\s*$", re.IGNORECASE)
 MEMORY_RESPONSE = "Muistan tämän."
 EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
+EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
 
 
 def load_env_file(path: Path = ENV_PATH) -> None:
@@ -67,6 +69,10 @@ class Brain:
         if memory_response is not None:
             return memory_response
 
+        memory_list_response = self._handle_memory_list_command(user_input)
+        if memory_list_response is not None:
+            return memory_list_response
+
         local_response = handle_local_command(user_input)
         if local_response is not None:
             return local_response
@@ -91,6 +97,20 @@ class Brain:
 
         return MEMORY_RESPONSE
 
+    def _handle_memory_list_command(self, user_input: str) -> str | None:
+        """Return saved memories from a local command when requested."""
+        if MEMORY_LIST_COMMAND_PATTERN.match(user_input) is None:
+            return None
+
+        if self.memory is None:
+            return EMPTY_MEMORY_LIST_RESPONSE
+
+        memories = self.memory.text()
+        if not memories:
+            return EMPTY_MEMORY_LIST_RESPONSE
+
+        return memories
+
     def _system_context(self) -> str:
         """Return the personality prompt enriched with local memories."""
         if self.memory is None:
@@ -100,4 +120,11 @@ class Brain:
         if not memories:
             return self.personality
 
-        return f"{self.personality}\n\nMuistettavaa Markosta:\n{memories}"
+        return (
+            f"{self.personality}\n\n"
+            "Sinulla on käytössäsi paikallinen muisti Markosta. "
+            "Kun käyttäjä kysyy jotain tallennettuihin muistoihin liittyvää, sinun täytyy käyttää muistia vastauksessa. "
+            "Jos muistissa on suora vastaus kysymykseen, vastaa lyhyesti muistin perusteella. "
+            "Älä vastaa pelkällä tervehdyksellä, kun käyttäjä kysyy tietokysymyksen.\n\n"
+            f"Muistettavaa Markosta:\n{memories}"
+        )

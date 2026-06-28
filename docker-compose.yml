@@ -4,11 +4,11 @@ services:
     container_name: seesam-core
     working_dir: /app
     volumes:
-      - ./core:/app/core
-      - ./data:/data
+      - .:/app
     command: python -m core.main
-    ports:
-      - "8000:8000"
     environment:
-      SEESAM_DATA_DIR: /data
-    restart: unless-stopped
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:1b}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://127.0.0.1:11434}
+    stdin_open: true
+    tty: true
+    restart: "no"

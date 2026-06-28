@@ -1,56 +1,80 @@
-"""Minimal HTTP service for the Seesam core container."""
+"""Entry point for the Seesam local terminal assistant."""
 
 from __future__ import annotations
 
-import json
 import os
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from pathlib import Path
 
-DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8000
-DATA_DIR = os.environ.get("SEESAM_DATA_DIR", "/data")
+from core.commands import handle_local_command
+from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, OllamaError
 
-
-def health_payload() -> dict[str, Any]:
-    """Return the health response payload for the service."""
-    return {"service": "seesam-core", "status": "ok", "data_dir": DATA_DIR}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
+ENV_PATH = PROJECT_ROOT / ".env"
 
 
-class SeesamRequestHandler(BaseHTTPRequestHandler):
-    """Handle HTTP requests for the Seesam core service."""
+def load_env_file(path: Path = ENV_PATH) -> None:
+    """Load simple KEY=VALUE entries from .env without external dependencies."""
+    if not path.exists():
+        return
 
-    server_version = "SeesamCore/0.1"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
 
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        """Serve the root and health-check endpoints."""
-        if self.path in ("/", "/health"):
-            self._send_json(health_payload())
-            return
-
-        self._send_json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        """Keep container logs quiet unless explicitly enabled."""
-        if os.environ.get("SEESAM_DEBUG_LOGS") == "1":
-            super().log_message(format, *args)
-
-    def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
-    """Start the Seesam core HTTP server."""
-    server = ThreadingHTTPServer((host, port), SeesamRequestHandler)
-    print(f"Seesam core listening on http://{host}:{port}", flush=True)
-    server.serve_forever()
+def load_personality(path: Path = PERSONALITY_PATH) -> str:
+    """Load Seesam's Finnish personality prompt."""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def build_client() -> OllamaClient:
+    """Create an Ollama client from environment configuration."""
+    return OllamaClient(
+        model=os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL),
+        host=os.environ.get("OLLAMA_HOST", DEFAULT_HOST),
+    )
+
+
+def respond(user_input: str, client: OllamaClient, personality: str) -> str:
+    """Return Seesam's response to one terminal-chat input."""
+    local_response = handle_local_command(user_input)
+    if local_response is not None:
+        return local_response
+
+    return client.generate(user_input, personality)
+
+
+def main() -> None:
+    """Start the terminal chat loop."""
+    load_env_file()
+    personality = load_personality()
+    client = build_client()
+
+    print("Seesam käynnissä. Lopeta komennolla 'exit' tai Ctrl-D.")
+    while True:
+        try:
+            user_input = input("Marko: ").strip()
+        except EOFError:
+            print()
+            break
+
+        if not user_input:
+            continue
+        if user_input.casefold() in {"exit", "quit", "lopeta"}:
+            break
+
+        try:
+            answer = respond(user_input, client, personality)
+        except OllamaError as exc:
+            answer = str(exc)
+
+        print(f"Seesam: {answer}")
 
 
 if __name__ == "__main__":
-    run(port=int(os.environ.get("PORT", DEFAULT_PORT)))
+    main()

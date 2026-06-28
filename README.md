@@ -45,6 +45,21 @@ vastaa heti `Seesam: Kuuntelen.` ilman Ollama-kutsua. Muut viestit, kuten
 
 Lopeta komennolla `exit`, `quit`, `lopeta` tai näppäinyhdistelmällä Ctrl-D.
 
+## Paikallinen muisti
+
+Seesam lukee ja kirjoittaa Markon paikalliset muistot oletuksena tiedostoon
+`memory/marko.local.txt`. Tiedosto on yksityinen paikallinen muisti, eikä sitä
+commitoida Git-repositorioon. Tiedoston ei tarvitse olla olemassa etukäteen:
+Seesam luo sen ja `memory`-hakemiston ensimmäisen tallennuksen yhteydessä.
+
+Muistin muoto on yksinkertainen: yksi muisto per rivi. Repositorion mukana
+tuleva `memory/marko.example.txt` on vain esimerkkitiedosto muistin muodosta.
+Voit halutessasi kopioida siitä lähtökohdan omaan paikalliseen muistiin:
+
+```sh
+cp memory/marko.example.txt memory/marko.local.txt
+```
+
 ## Ajaminen Docker Composella
 
 Käynnistä terminaalichat kontissa:

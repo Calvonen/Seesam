@@ -14,7 +14,7 @@ from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, Ollama
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 ENV_PATH = PROJECT_ROOT / ".env"
-MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.txt"
+MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.local.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
 MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti)\s*$", re.IGNORECASE)
 MEMORY_RESPONSE = "Muistan tämän."

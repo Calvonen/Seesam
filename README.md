@@ -9,12 +9,46 @@ terminaalissa, ja varsinaiset vastaukset haetaan paikalliselta Ollama-palvelulta
 - Docker Compose, jos haluat ajaa avustajan kontissa
 - Ollama käynnissä koneella
 - Ollama-malli `gemma3:1b`
+- Python-virtuaaliympäristö projektin hakemistossa (`.venv`)
 
 Lataa oletusmalli:
 
 ```sh
 ollama pull gemma3:1b
 ```
+
+## Python-virtuaaliympäristö
+
+Luo projektin paikallinen virtuaaliympäristö ennen riippuvuuksien asentamista
+ja komentojen ajamista:
+
+```sh
+python3 -m venv .venv
+```
+
+Aktivoi virtuaaliympäristö macOS- tai Linux-terminaalissa:
+
+```sh
+source .venv/bin/activate
+```
+
+Aktivoi virtuaaliympäristö Windows PowerShellissä:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Asenna Python-riippuvuudet aktivoidun virtuaaliympäristön sisään:
+
+```sh
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Kun virtuaaliympäristö on aktiivinen, kaikki `python`- ja `python -m ...`
+-komennot käyttävät projektin `.venv`-ympäristöä. Jos avaat uuden terminaalin,
+aktivoi `.venv` uudelleen ennen Seesamin ajamista, API:n käynnistämistä tai
+testien suorittamista.
 
 ## Asetukset
 
@@ -37,9 +71,10 @@ TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
 
 ## Ajaminen paikallisesti
 
-Käynnistä terminaalichat:
+Aktivoi ensin virtuaaliympäristö ja käynnistä terminaalichat:
 
 ```sh
+source .venv/bin/activate
 python -m core.main
 ```
 
@@ -53,15 +88,12 @@ Lopeta komennolla `exit`, `quit`, `lopeta` tai näppäinyhdistelmällä Ctrl-D.
 ## HTTP API
 
 Seesam sisältää myös FastAPI-pohjaisen HTTP-rajapinnan. Asenna ensin
-riippuvuudet:
+riippuvuudet virtuaaliympäristöön kohdan "Python-virtuaaliympäristö" mukaisesti.
+
+Käynnistä API paikallisesti aktivoidussa virtuaaliympäristössä:
 
 ```sh
-python -m pip install -r requirements.txt
-```
-
-Käynnistä API paikallisesti:
-
-```sh
+source .venv/bin/activate
 python -m uvicorn core.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -82,7 +114,7 @@ curl -X POST http://127.0.0.1:8000/chat \
 Vastaus palautetaan muodossa `{"answer":"..."}`. API käyttää samaa
 `Brain`-luokkaa kuin terminaalichat, joten paikalliset komennot, muisti,
 persoonallisuus ja Ollama-asetukset toimivat samalla tavalla molemmissa
-käyttötavoissa. Terminaalichat toimii edelleen komennolla `python -m core.main`.
+käyttötavoissa. Terminaalichat toimii edelleen aktivoidussa virtuaaliympäristössä komennolla `python -m core.main`.
 
 ## Paikallinen muisti
 
@@ -118,11 +150,11 @@ TTS_PIPER_BIN=piper
 TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
 ```
 
-Jos Piper on asennettu virtuaaliympäristöön, aseta `TTS_PIPER_BIN` osoittamaan
-suoraan binääriin, esimerkiksi:
+Jos Piper on asennettu tämän projektin virtuaaliympäristöön, aseta
+`TTS_PIPER_BIN` osoittamaan suoraan `.venv`-binääriin, esimerkiksi:
 
 ```env
-TTS_PIPER_BIN=/home/marko/piper-venv/bin/piper
+TTS_PIPER_BIN=/home/marko/Seesam/.venv/bin/piper
 ```
 
 Jos Piper, mallitiedosto tai `aplay` ei ole käytettävissä, Seesam jatkaa
@@ -142,6 +174,9 @@ oman osoitteen ympäristömuuttujaan.
 
 ## Testit
 
+Suorita testit aktivoidussa virtuaaliympäristössä:
+
 ```sh
+source .venv/bin/activate
 python -m pytest
 ```

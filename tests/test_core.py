@@ -267,3 +267,65 @@ def test_conversation_history_is_limited_to_configured_length():
     assert "Käyttäjä: viesti 1" in latest_prompt
     assert "Seesam: Vastaus 2" in latest_prompt
     assert latest_prompt.endswith("Käyttäjä: viesti 4")
+
+
+def test_tts_disabled_does_not_call_subprocess(monkeypatch):
+    from core import tts
+
+    calls = []
+    monkeypatch.delenv("TTS_ENABLED", raising=False)
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", "/tmp/voice.onnx")
+    monkeypatch.setenv("TTS_PIPER_BIN", "piper")
+    monkeypatch.setattr(tts.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    assert tts.is_tts_enabled() is False
+    tts.speak("Hei")
+
+    assert calls == []
+
+
+def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch):
+    from core import tts
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return None
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", "/home/marko/piper-models/fi_FI-harri-medium.onnx")
+    monkeypatch.setenv("TTS_PIPER_BIN", "/home/marko/piper-venv/bin/piper")
+    monkeypatch.setattr(tts.subprocess, "run", fake_run)
+
+    tts.speak("Hei Marko")
+
+    assert len(calls) == 2
+    assert calls[0][0][:4] == [
+        "/home/marko/piper-venv/bin/piper",
+        "--model",
+        "/home/marko/piper-models/fi_FI-harri-medium.onnx",
+        "--output_file",
+    ]
+    assert calls[0][1]["input"] == "Hei Marko"
+    assert calls[0][1]["text"] is True
+    assert calls[0][1]["check"] is True
+    assert calls[1][0][0] == "aplay"
+    assert calls[1][1]["check"] is True
+
+
+def test_piper_failure_does_not_crash_app(monkeypatch):
+    from core import tts
+
+    def fail_run(command, **kwargs):
+        raise tts.subprocess.CalledProcessError(returncode=1, cmd=command)
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", "/home/marko/piper-models/fi_FI-harri-medium.onnx")
+    monkeypatch.setenv("TTS_PIPER_BIN", "piper")
+    monkeypatch.setattr(tts.subprocess, "run", fail_run)
+
+    tts.speak("Hei Marko")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.commands import handle_local_command
@@ -17,6 +17,7 @@ ENV_PATH = PROJECT_ROOT / ".env"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.local.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
 MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti)\s*$", re.IGNORECASE)
+CONVERSATION_HISTORY_LIMIT = 6
 MEMORY_RESPONSE = "Muistan tämän."
 EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
@@ -56,6 +57,8 @@ class Brain:
     client: OllamaClient
     personality: str
     memory: Memory | None = None
+    conversation_history: list[tuple[str, str]] = field(default_factory=list)
+    history_limit: int = CONVERSATION_HISTORY_LIMIT
 
     @classmethod
     def from_environment(cls) -> "Brain":
@@ -78,9 +81,13 @@ class Brain:
             return local_response
 
         try:
-            return self.client.generate(user_input, self._system_context())
+            answer = self.client.generate(self._prompt_with_history(user_input), self._system_context())
         except OllamaError as exc:
             return str(exc)
+
+        self._remember_exchange("Käyttäjä", user_input)
+        self._remember_exchange("Seesam", answer)
+        return answer
 
     def _handle_memory_command(self, user_input: str) -> str | None:
         """Save memory from a local command when requested."""
@@ -128,3 +135,27 @@ class Brain:
             "Älä vastaa pelkällä tervehdyksellä, kun käyttäjä kysyy tietokysymyksen.\n\n"
             f"Muistettavaa Markosta:\n{memories}"
         )
+
+    def _prompt_with_history(self, user_input: str) -> str:
+        """Return the current prompt with short in-memory conversation history."""
+        if not self.conversation_history:
+            return user_input
+
+        history_lines = [f"{role}: {message}" for role, message in self.conversation_history]
+        history = "\n".join(history_lines)
+        return (
+            "Aiempi keskustelu tässä istunnossa:\n"
+            f"{history}\n\n"
+            "Vastaa seuraavaan käyttäjän viestiin jatkaen keskustelua. "
+            "Älä toista aiempia viestejä tarpeettomasti.\n"
+            f"Käyttäjä: {user_input}"
+        )
+
+    def _remember_exchange(self, role: str, message: str) -> None:
+        """Store one in-memory conversation message and keep the configured limit."""
+        if self.history_limit <= 0:
+            self.conversation_history.clear()
+            return
+
+        self.conversation_history.append((role, message))
+        del self.conversation_history[:-self.history_limit]

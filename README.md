@@ -49,6 +49,41 @@ vastaa heti `Seesam: Kuuntelen.` ilman Ollama-kutsua. Muut viestit, kuten
 
 Lopeta komennolla `exit`, `quit`, `lopeta` tai näppäinyhdistelmällä Ctrl-D.
 
+
+## HTTP API
+
+Seesam sisältää myös FastAPI-pohjaisen HTTP-rajapinnan. Asenna ensin
+riippuvuudet:
+
+```sh
+python -m pip install -r requirements.txt
+```
+
+Käynnistä API paikallisesti:
+
+```sh
+python -m uvicorn core.api:app --host 127.0.0.1 --port 8000
+```
+
+Tarkista palvelun tila:
+
+```sh
+curl http://127.0.0.1:8000/health
+```
+
+Lähetä chat-viesti:
+
+```sh
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"moro"}'
+```
+
+Vastaus palautetaan muodossa `{"answer":"..."}`. API käyttää samaa
+`Brain`-luokkaa kuin terminaalichat, joten paikalliset komennot, muisti,
+persoonallisuus ja Ollama-asetukset toimivat samalla tavalla molemmissa
+käyttötavoissa. Terminaalichat toimii edelleen komennolla `python -m core.main`.
+
 ## Paikallinen muisti
 
 Seesam lukee ja kirjoittaa Markon paikalliset muistot oletuksena tiedostoon

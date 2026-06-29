@@ -29,6 +29,10 @@ Oletusarvot ovat:
 ```env
 OLLAMA_MODEL=gemma3:1b
 OLLAMA_HOST=http://127.0.0.1:11434
+TTS_ENABLED=true
+TTS_ENGINE=piper
+TTS_PIPER_BIN=piper
+TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
 ```
 
 ## Ajaminen paikallisesti
@@ -59,6 +63,35 @@ Voit halutessasi kopioida siitä lähtökohdan omaan paikalliseen muistiin:
 ```sh
 cp memory/marko.example.txt memory/marko.local.txt
 ```
+
+## Piper-puhe
+
+Seesam voi lukea vastaukset ääneen Piperillä. Asenna Piper niin, että komento
+`piper` löytyy terminaalista, ja varmista että `aplay` toimii äänen toistoon.
+Lataa tai sijoita suomalainen äänimalli paikallisesti, esimerkiksi:
+
+```sh
+/home/marko/piper-models/fi_FI-harri-medium.onnx
+```
+
+Ota puhe käyttöön `.env`-tiedostossa:
+
+```env
+TTS_ENABLED=true
+TTS_ENGINE=piper
+TTS_PIPER_BIN=piper
+TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
+```
+
+Jos Piper on asennettu virtuaaliympäristöön, aseta `TTS_PIPER_BIN` osoittamaan
+suoraan binääriin, esimerkiksi:
+
+```env
+TTS_PIPER_BIN=/home/marko/piper-venv/bin/piper
+```
+
+Jos Piper, mallitiedosto tai `aplay` ei ole käytettävissä, Seesam jatkaa
+terminaalichattia normaalisti ilman kaatumista.
 
 ## Ajaminen Docker Composella
 

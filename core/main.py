@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.brain import Brain
+from core.tts import is_tts_enabled, speak
 
 
 def main() -> None:
@@ -22,7 +23,10 @@ def main() -> None:
         if user_input.casefold() in {"exit", "quit", "lopeta"}:
             break
 
-        print(f"Seesam: {brain.respond(user_input)}")
+        answer = brain.respond(user_input)
+        print(f"Seesam: {answer}")
+        if is_tts_enabled():
+            speak(answer)
 
 
 if __name__ == "__main__":

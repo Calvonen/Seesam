@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from core.brain import Brain
+from core.status import StatusCollector
 
 
 class ChatRequest(BaseModel):
@@ -20,10 +21,14 @@ class ChatResponse(BaseModel):
     answer: str
 
 
-def create_app(brain: Brain | None = None) -> FastAPI:
+def create_app(
+    brain: Brain | None = None,
+    status_collector: StatusCollector | None = None,
+) -> FastAPI:
     """Create the FastAPI app, optionally using an injected Brain for tests."""
     app = FastAPI(title="Seesam HTTP API")
     app.state.brain = brain
+    app.state.status_collector = status_collector or StatusCollector.started_now()
 
     def get_brain() -> Brain:
         if app.state.brain is None:
@@ -34,6 +39,11 @@ def create_app(brain: Brain | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         """Return API health status."""
         return {"status": "ok"}
+
+    @app.get("/status")
+    def status() -> dict[str, object]:
+        """Return server-only runtime status."""
+        return app.state.status_collector.collect()
 
     @app.post("/chat", response_model=ChatResponse)
     def chat(request: ChatRequest) -> ChatResponse:

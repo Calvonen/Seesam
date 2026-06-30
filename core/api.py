@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 from core.brain import Brain
 from core.status import StatusCollector
+from core import tts
 
 
 class ChatRequest(BaseModel):
@@ -19,6 +20,12 @@ class ChatResponse(BaseModel):
     """Outgoing chat response payload."""
 
     answer: str
+
+
+class SpeakRequest(BaseModel):
+    """Incoming speech synthesis request payload."""
+
+    text: str
 
 
 def create_app(
@@ -50,6 +57,15 @@ def create_app(
         """Return Seesam's answer for one chat message."""
         answer = get_brain().respond(request.message)
         return ChatResponse(answer=answer)
+
+    @app.post("/speak")
+    def speak(request: SpeakRequest) -> Response:
+        """Return synthesized speech as WAV audio."""
+        try:
+            audio = tts.synthesize_wav(request.text)
+        except tts.TTSError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        return Response(content=audio, media_type="audio/wav")
 
     return app
 

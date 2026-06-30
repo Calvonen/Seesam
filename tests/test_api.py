@@ -3,6 +3,7 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
+from core import tts
 from core.api import create_app
 
 
@@ -68,6 +69,31 @@ def test_status_returns_server_status():
         },
         "gpu_name": "NVIDIA Test GPU",
     }
+
+
+def test_speak_returns_wav_audio(monkeypatch):
+    client = TestClient(create_app(brain=FakeBrain()))
+    monkeypatch.setattr(tts, "synthesize_wav", lambda text: b"RIFF wav bytes")
+
+    response = client.post("/speak", json={"text": "moro"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == b"RIFF wav bytes"
+
+
+def test_speak_returns_json_error_when_tts_unavailable(monkeypatch):
+    client = TestClient(create_app(brain=FakeBrain()))
+
+    def fail_synthesis(text):
+        raise tts.TTSError(503, "TTS is disabled. Set TTS_ENABLED=true to enable speech synthesis.")
+
+    monkeypatch.setattr(tts, "synthesize_wav", fail_synthesis)
+
+    response = client.post("/speak", json={"text": "moro"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "TTS is disabled. Set TTS_ENABLED=true to enable speech synthesis."}
 
 
 def test_chat_uses_injected_brain_and_returns_answer():

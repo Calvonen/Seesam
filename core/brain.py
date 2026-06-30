@@ -8,12 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.commands import handle_local_command
+from core.config import PROJECT_ROOT, load_env_file
 from core.memory import Memory
 from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, OllamaError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
-ENV_PATH = PROJECT_ROOT / ".env"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.local.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
 MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti)\s*$", re.IGNORECASE)
@@ -21,20 +20,6 @@ CONVERSATION_HISTORY_LIMIT = 6
 MEMORY_RESPONSE = "Muistan tämän."
 EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
-
-
-def load_env_file(path: Path = ENV_PATH) -> None:
-    """Load simple KEY=VALUE entries from .env without external dependencies."""
-    if not path.exists():
-        return
-
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-
-        key, value = stripped.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def load_personality(path: Path = PERSONALITY_PATH) -> str:

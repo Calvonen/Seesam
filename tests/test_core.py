@@ -273,7 +273,8 @@ def test_tts_disabled_does_not_call_subprocess(monkeypatch):
     from core import tts
 
     calls = []
-    monkeypatch.delenv("TTS_ENABLED", raising=False)
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    monkeypatch.setenv("TTS_ENABLED", "false")
     monkeypatch.setenv("TTS_ENGINE", "piper")
     monkeypatch.setenv("TTS_MODEL", "/tmp/voice.onnx")
     monkeypatch.setenv("TTS_PIPER_BIN", "piper")
@@ -285,10 +286,13 @@ def test_tts_disabled_does_not_call_subprocess(monkeypatch):
     assert calls == []
 
 
-def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch):
+def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch, tmp_path):
     from core import tts
 
     calls = []
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    piper_bin = tmp_path / "piper"
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
@@ -296,17 +300,17 @@ def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch):
 
     monkeypatch.setenv("TTS_ENABLED", "true")
     monkeypatch.setenv("TTS_ENGINE", "piper")
-    monkeypatch.setenv("TTS_MODEL", "/home/marko/piper-models/fi_FI-harri-medium.onnx")
-    monkeypatch.setenv("TTS_PIPER_BIN", "/home/marko/piper-venv/bin/piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
     monkeypatch.setattr(tts.subprocess, "run", fake_run)
 
     tts.speak("Hei Marko")
 
     assert len(calls) == 2
     assert calls[0][0][:4] == [
-        "/home/marko/piper-venv/bin/piper",
+        str(piper_bin),
         "--model",
-        "/home/marko/piper-models/fi_FI-harri-medium.onnx",
+        str(model),
         "--output_file",
     ]
     assert calls[0][1]["input"] == "Hei Marko"
@@ -319,13 +323,132 @@ def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch):
 def test_piper_failure_does_not_crash_app(monkeypatch):
     from core import tts
 
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+
     def fail_run(command, **kwargs):
         raise tts.subprocess.CalledProcessError(returncode=1, cmd=command)
 
     monkeypatch.setenv("TTS_ENABLED", "true")
     monkeypatch.setenv("TTS_ENGINE", "piper")
-    monkeypatch.setenv("TTS_MODEL", "/home/marko/piper-models/fi_FI-harri-medium.onnx")
+    monkeypatch.setenv("TTS_MODEL", "/tmp/voice.onnx")
     monkeypatch.setenv("TTS_PIPER_BIN", "piper")
     monkeypatch.setattr(tts.subprocess, "run", fail_run)
 
     tts.speak("Hei Marko")
+
+
+def test_synthesize_wav_calls_piper_without_aplay(monkeypatch, tmp_path):
+    from core import tts
+
+    calls = []
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    piper_bin = tmp_path / "piper"
+    model.write_text("model", encoding="utf-8")
+    piper_bin.write_text("#!/bin/sh", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        Path(command[-1]).write_bytes(b"RIFF wav bytes")
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
+    monkeypatch.setattr(tts.subprocess, "run", fake_run)
+
+    audio = tts.synthesize_wav(" Hei Marko ")
+
+    assert audio == b"RIFF wav bytes"
+    assert len(calls) == 1
+    assert calls[0][0][:4] == [str(piper_bin), "--model", str(model), "--output_file"]
+    assert calls[0][1]["input"] == "Hei Marko"
+    assert calls[0][1]["text"] is True
+    assert calls[0][1]["check"] is True
+
+
+def test_synthesize_wav_returns_clear_error_when_disabled(monkeypatch):
+    from core import tts
+
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    monkeypatch.setenv("TTS_ENABLED", "false")
+
+    try:
+        tts.synthesize_wav("Hei")
+    except tts.TTSError as error:
+        assert error.status_code == 503
+        assert "TTS is disabled" in error.detail
+    else:
+        raise AssertionError("Expected TTSError")
+
+
+def test_synthesize_wav_returns_clear_error_when_model_missing(monkeypatch, tmp_path):
+    from core import tts
+
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    piper_bin = tmp_path / "piper"
+    piper_bin.write_text("#!/bin/sh", encoding="utf-8")
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(tmp_path / "missing.onnx"))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
+
+    try:
+        tts.synthesize_wav("Hei")
+    except tts.TTSError as error:
+        assert error.status_code == 503
+        assert "Piper model missing" in error.detail
+        assert "missing.onnx" in error.detail
+    else:
+        raise AssertionError("Expected TTSError")
+
+
+def test_synthesize_wav_returns_clear_error_when_piper_binary_missing(monkeypatch, tmp_path):
+    from core import tts
+
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    model.write_text("model", encoding="utf-8")
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", "missing-piper-bin")
+    monkeypatch.setattr(tts.shutil, "which", lambda command: None)
+
+    try:
+        tts.synthesize_wav("Hei")
+    except tts.TTSError as error:
+        assert error.status_code == 503
+        assert "Piper binary not found" in error.detail
+        assert "missing-piper-bin" in error.detail
+    else:
+        raise AssertionError("Expected TTSError")
+
+
+def test_synthesize_wav_returns_clear_error_when_synthesis_fails(monkeypatch, tmp_path):
+    from core import tts
+
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    piper_bin = tmp_path / "piper"
+    model.write_text("model", encoding="utf-8")
+    piper_bin.write_text("#!/bin/sh", encoding="utf-8")
+
+    def fail_run(command, **kwargs):
+        raise tts.subprocess.CalledProcessError(returncode=1, cmd=command)
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
+    monkeypatch.setattr(tts.subprocess, "run", fail_run)
+
+    try:
+        tts.synthesize_wav("Hei")
+    except tts.TTSError as error:
+        assert error.status_code == 500
+        assert "Piper synthesis failed" in error.detail
+    else:
+        raise AssertionError("Expected TTSError")

@@ -9,6 +9,10 @@ services:
     environment:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:1b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://127.0.0.1:11434}
+      TTS_ENABLED: ${TTS_ENABLED:-false}
+      TTS_ENGINE: ${TTS_ENGINE:-piper}
+      TTS_PIPER_BIN: ${TTS_PIPER_BIN:-piper}
+      TTS_MODEL: ${TTS_MODEL:-}
     stdin_open: true
     tty: true
     restart: "no"

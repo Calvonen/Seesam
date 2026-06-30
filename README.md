@@ -66,7 +66,7 @@ OLLAMA_HOST=http://127.0.0.1:11434
 TTS_ENABLED=true
 TTS_ENGINE=piper
 TTS_PIPER_BIN=piper
-TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
+TTS_MODEL=/path/to/piper-model.onnx
 ```
 
 ## Ajaminen paikallisesti
@@ -114,7 +114,21 @@ curl -X POST http://127.0.0.1:8000/chat \
 Vastaus palautetaan muodossa `{"answer":"..."}`. API käyttää samaa
 `Brain`-luokkaa kuin terminaalichat, joten paikalliset komennot, muisti,
 persoonallisuus ja Ollama-asetukset toimivat samalla tavalla molemmissa
-käyttötavoissa. Terminaalichat toimii edelleen aktivoidussa virtuaaliympäristössä komennolla `python -m core.main`.
+käyttötavoissa.
+
+Luo puhe WAV-tiedostona Piper-asetuksilla:
+
+```sh
+curl -X POST http://127.0.0.1:8000/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text":"moro Marko"}' \
+  --output seesam.wav
+```
+
+Endpoint palauttaa `audio/wav`-vastauksen eikä toista ääntä palvelimella. Jos
+TTS ei ole käytössä tai Piperin binääri tai mallitiedosto puuttuu, vastaus on
+JSON-muotoinen virhe sopivalla HTTP-tilakoodilla. Terminaalichat toimii edelleen
+aktivoidussa virtuaaliympäristössä komennolla `python -m core.main`.
 
 ## Paikallinen muisti
 
@@ -133,13 +147,13 @@ cp memory/marko.example.txt memory/marko.local.txt
 
 ## Piper-puhe
 
-Seesam voi lukea vastaukset ääneen Piperillä. Asenna Piper niin, että komento
-`piper` löytyy terminaalista, ja varmista että `aplay` toimii äänen toistoon.
-Lataa tai sijoita suomalainen äänimalli paikallisesti, esimerkiksi:
+Seesam voi lukea vastaukset ääneen Piperillä ja `/speak` voi palauttaa puheen
+WAV-tiedostona. Asenna Piper niin, että komento `piper` löytyy `PATH`-polusta,
+tai aseta `TTS_PIPER_BIN` osoittamaan Piperin suoritettavaan tiedostoon.
 
-```sh
-/home/marko/piper-models/fi_FI-harri-medium.onnx
-```
+Lataa Piperin `.onnx`-äänimalli paikalliseen hakemistoon. Esimerkiksi
+suomenkielisen äänen voi sijoittaa projektin ulkopuolelle omaan mallihakemistoon,
+ja `TTS_MODEL` asetetaan osoittamaan siihen tiedostoon.
 
 Ota puhe käyttöön `.env`-tiedostossa:
 
@@ -147,18 +161,20 @@ Ota puhe käyttöön `.env`-tiedostossa:
 TTS_ENABLED=true
 TTS_ENGINE=piper
 TTS_PIPER_BIN=piper
-TTS_MODEL=/home/marko/piper-models/fi_FI-harri-medium.onnx
+TTS_MODEL=/path/to/piper-model.onnx
 ```
 
-Jos Piper on asennettu tämän projektin virtuaaliympäristöön, aseta
-`TTS_PIPER_BIN` osoittamaan suoraan `.venv`-binääriin, esimerkiksi:
+Jos Piper on asennettu tämän projektin virtuaaliympäristöön, voit käyttää
+suhteellista projektipolkua tai absoluuttista polkua, esimerkiksi:
 
 ```env
-TTS_PIPER_BIN=/home/marko/Seesam/.venv/bin/piper
+TTS_PIPER_BIN=.venv/bin/piper
 ```
 
-Jos Piper, mallitiedosto tai `aplay` ei ole käytettävissä, Seesam jatkaa
-terminaalichattia normaalisti ilman kaatumista.
+`/speak` palauttaa JSON-virheen, jos TTS on pois käytöstä, Piper-binääriä ei
+löydy, mallitiedosto puuttuu tai Piper ei pysty luomaan WAV-tiedostoa.
+Terminaalichat jatkaa edelleen normaalisti ilman kaatumista, jos Piper,
+mallitiedosto tai `aplay` ei ole käytettävissä.
 
 ## Ajaminen Docker Composella
 

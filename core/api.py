@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
 from core.brain import Brain
 from core.status import StatusCollector
-from core import tts
+from core import stt, tts
 
 
 class ChatRequest(BaseModel):
@@ -24,6 +24,12 @@ class ChatResponse(BaseModel):
 
 class SpeakRequest(BaseModel):
     """Incoming speech synthesis request payload."""
+
+    text: str
+
+
+class TranscribeResponse(BaseModel):
+    """Outgoing transcription response payload."""
 
     text: str
 
@@ -66,6 +72,18 @@ def create_app(
         except tts.TTSError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
         return Response(content=audio, media_type="audio/wav")
+
+    @app.post("/transcribe", response_model=TranscribeResponse)
+    async def transcribe(file: UploadFile = File(...)) -> TranscribeResponse:
+        """Return transcription text for an uploaded audio file."""
+        try:
+            text = stt.transcribe_audio(await file.read(), file.filename)
+        except stt.STTError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        finally:
+            await file.close()
+
+        return TranscribeResponse(text=text)
 
     return app
 

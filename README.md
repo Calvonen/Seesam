@@ -67,6 +67,12 @@ TTS_ENABLED=true
 TTS_ENGINE=piper
 TTS_PIPER_BIN=piper
 TTS_MODEL=/path/to/piper-model.onnx
+STT_ENABLED=true
+STT_ENGINE=faster-whisper
+STT_MODEL=small
+STT_LANGUAGE=fi
+STT_DEVICE=cpu
+STT_COMPUTE_TYPE=int8
 ```
 
 ## Ajaminen paikallisesti
@@ -127,7 +133,20 @@ curl -X POST http://127.0.0.1:8000/speak \
 
 Endpoint palauttaa `audio/wav`-vastauksen eikä toista ääntä palvelimella. Jos
 TTS ei ole käytössä tai Piperin binääri tai mallitiedosto puuttuu, vastaus on
-JSON-muotoinen virhe sopivalla HTTP-tilakoodilla. Terminaalichat toimii edelleen
+JSON-muotoinen virhe sopivalla HTTP-tilakoodilla.
+
+Litteroi sovelluksen lähettämä äänitiedosto tekstiksi:
+
+```sh
+curl -X POST http://127.0.0.1:8000/transcribe \
+  -F "file=@seesam.wav;type=audio/wav"
+```
+
+Vastaus palautetaan muodossa `{"text":"..."}`. Oletuskieli on suomi
+`STT_LANGUAGE=fi`-asetuksella, ja oletusmoottori on paikallinen
+`faster-whisper`. Jos STT ei ole käytössä, `faster-whisper` puuttuu tai
+Whisper-mallia ei saada ladattua, endpoint palauttaa JSON-muotoisen virheen
+sopivalla HTTP-tilakoodilla. Terminaalichat toimii edelleen
 aktivoidussa virtuaaliympäristössä komennolla `python -m core.main`.
 
 ## Paikallinen muisti
@@ -175,6 +194,28 @@ TTS_PIPER_BIN=.venv/bin/piper
 löydy, mallitiedosto puuttuu tai Piper ei pysty luomaan WAV-tiedostoa.
 Terminaalichat jatkaa edelleen normaalisti ilman kaatumista, jos Piper,
 mallitiedosto tai `aplay` ei ole käytettävissä.
+
+## Whisper-litterointi
+
+`/transcribe` käyttää `faster-whisper`-kirjastoa paikalliseen
+puheentunnistukseen. Oletusasetukset ovat:
+
+```env
+STT_ENABLED=true
+STT_ENGINE=faster-whisper
+STT_MODEL=small
+STT_LANGUAGE=fi
+STT_DEVICE=cpu
+STT_COMPUTE_TYPE=int8
+```
+
+`STT_MODEL` voi olla faster-whisperin mallinimi kuten `small` tai polku
+paikalliseen mallihakemistoon. Oletuksena litterointi käyttää CPU:ta asetuksilla
+`STT_DEVICE=cpu` ja `STT_COMPUTE_TYPE=int8`, jotta CUDA-kirjastoja ei tarvita.
+GPU:n voi ottaa myöhemmin käyttöön asetuksilla `STT_DEVICE=cuda` ja
+`STT_COMPUTE_TYPE=float16`. Ensimmäinen mallinimen käyttö voi vaatia mallin
+lataamisen faster-whisperin välimuistiin. Jos STT on pois käytöstä tai mallia
+ei saada ladattua, `/transcribe` palauttaa selkeän JSON-virheen.
 
 ## Ajaminen Docker Composella
 

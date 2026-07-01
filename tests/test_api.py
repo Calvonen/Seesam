@@ -3,7 +3,7 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
-from core import tts
+from core import stt, tts
 from core.api import create_app
 
 
@@ -94,6 +94,48 @@ def test_speak_returns_json_error_when_tts_unavailable(monkeypatch):
 
     assert response.status_code == 503
     assert response.json() == {"detail": "TTS is disabled. Set TTS_ENABLED=true to enable speech synthesis."}
+
+
+def test_transcribe_returns_text_for_uploaded_audio(monkeypatch):
+    client = TestClient(create_app(brain=FakeBrain()))
+    calls = []
+
+    def fake_transcribe(audio, filename):
+        calls.append((audio, filename))
+        return "moro Marko"
+
+    monkeypatch.setattr(stt, "transcribe_audio", fake_transcribe)
+
+    response = client.post(
+        "/transcribe",
+        files={"file": ("voice.wav", b"audio bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "moro Marko"}
+    assert calls == [(b"audio bytes", "voice.wav")]
+
+
+def test_transcribe_returns_json_error_when_stt_unavailable(monkeypatch):
+    client = TestClient(create_app(brain=FakeBrain()))
+
+    def fail_transcription(audio, filename):
+        raise stt.STTError(
+            503,
+            "STT is disabled. Set STT_ENABLED=true to enable speech transcription.",
+        )
+
+    monkeypatch.setattr(stt, "transcribe_audio", fail_transcription)
+
+    response = client.post(
+        "/transcribe",
+        files={"file": ("voice.wav", b"audio bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "STT is disabled. Set STT_ENABLED=true to enable speech transcription.",
+    }
 
 
 def test_chat_uses_injected_brain_and_returns_answer():

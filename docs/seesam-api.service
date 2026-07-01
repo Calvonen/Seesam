@@ -1,0 +1,16 @@
+[Unit]
+Description=Seesam API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=marko
+WorkingDirectory=/home/marko/Seesam
+EnvironmentFile=/home/marko/Seesam/.env
+ExecStart=/home/marko/Seesam/.venv/bin/python -m uvicorn core.api:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

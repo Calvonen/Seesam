@@ -269,6 +269,127 @@ def test_conversation_history_is_limited_to_configured_length():
     assert latest_prompt.endswith("Käyttäjä: viesti 4")
 
 
+def test_transcribe_audio_uses_faster_whisper_with_finnish_default(monkeypatch):
+    from core import stt
+
+    calls = []
+    loader_calls = []
+
+    class Segment:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeModel:
+        def transcribe(self, audio_path, language):
+            calls.append((audio_path, language))
+            return [Segment(" moro"), Segment(" Marko ")], object()
+
+    monkeypatch.setattr(stt, "load_env_file", lambda: None)
+    monkeypatch.setenv("STT_ENABLED", "true")
+    monkeypatch.setenv("STT_ENGINE", "faster-whisper")
+    monkeypatch.setenv("STT_MODEL", "small")
+    monkeypatch.delenv("STT_LANGUAGE", raising=False)
+    monkeypatch.delenv("STT_DEVICE", raising=False)
+    monkeypatch.delenv("STT_COMPUTE_TYPE", raising=False)
+
+    def fake_load_model(model_name, device, compute_type):
+        loader_calls.append((model_name, device, compute_type))
+        return FakeModel()
+
+    monkeypatch.setattr(stt, "_load_faster_whisper_model", fake_load_model)
+
+    text = stt.transcribe_audio(b"audio bytes", "voice.wav")
+
+    assert text == "moro Marko"
+    assert len(calls) == 1
+    assert calls[0][0].endswith(".wav")
+    assert calls[0][1] == "fi"
+    assert loader_calls == [("small", "cpu", "int8")]
+
+
+def test_transcribe_audio_returns_clear_error_when_disabled(monkeypatch):
+    from core import stt
+
+    monkeypatch.setattr(stt, "load_env_file", lambda: None)
+    monkeypatch.setenv("STT_ENABLED", "false")
+
+    try:
+        stt.transcribe_audio(b"audio bytes", "voice.wav")
+    except stt.STTError as error:
+        assert error.status_code == 503
+        assert "STT is disabled" in error.detail
+    else:
+        raise AssertionError("Expected STTError")
+
+
+def test_transcribe_audio_returns_clear_error_when_model_not_configured(monkeypatch):
+    from core import stt
+
+    monkeypatch.setattr(stt, "load_env_file", lambda: None)
+    monkeypatch.setenv("STT_ENABLED", "true")
+    monkeypatch.setenv("STT_ENGINE", "faster-whisper")
+    monkeypatch.setenv("STT_MODEL", "")
+
+    try:
+        stt.transcribe_audio(b"audio bytes", "voice.wav")
+    except stt.STTError as error:
+        assert error.status_code == 503
+        assert "Whisper model is not configured" in error.detail
+    else:
+        raise AssertionError("Expected STTError")
+
+
+def test_transcribe_audio_allows_cuda_float16_configuration(monkeypatch):
+    from core import stt
+
+    loader_calls = []
+
+    class FakeModel:
+        def transcribe(self, audio_path, language):
+            return [], object()
+
+    def fake_load_model(model_name, device, compute_type):
+        loader_calls.append((model_name, device, compute_type))
+        return FakeModel()
+
+    monkeypatch.setattr(stt, "load_env_file", lambda: None)
+    monkeypatch.setenv("STT_ENABLED", "true")
+    monkeypatch.setenv("STT_ENGINE", "faster-whisper")
+    monkeypatch.setenv("STT_MODEL", "small")
+    monkeypatch.setenv("STT_DEVICE", "cuda")
+    monkeypatch.setenv("STT_COMPUTE_TYPE", "float16")
+    monkeypatch.setattr(stt, "_load_faster_whisper_model", fake_load_model)
+
+    assert stt.transcribe_audio(b"audio bytes", "voice.wav") == ""
+    assert loader_calls == [("small", "cuda", "float16")]
+
+
+def test_transcribe_audio_returns_clear_error_when_model_missing(monkeypatch):
+    from core import stt
+
+    monkeypatch.setattr(stt, "load_env_file", lambda: None)
+    monkeypatch.setenv("STT_ENABLED", "true")
+    monkeypatch.setenv("STT_ENGINE", "faster-whisper")
+    monkeypatch.setenv("STT_MODEL", "missing-model")
+
+    def fail_load(model_name, device, compute_type):
+        raise stt.STTError(
+            503,
+            f"Whisper model missing or unavailable. STT_MODEL is set to '{model_name}'.",
+        )
+
+    monkeypatch.setattr(stt, "_load_faster_whisper_model", fail_load)
+
+    try:
+        stt.transcribe_audio(b"audio bytes", "voice.wav")
+    except stt.STTError as error:
+        assert error.status_code == 503
+        assert "Whisper model missing or unavailable" in error.detail
+        assert "missing-model" in error.detail
+    else:
+        raise AssertionError("Expected STTError")
+
+
 def test_tts_disabled_does_not_call_subprocess(monkeypatch):
     from core import tts
 

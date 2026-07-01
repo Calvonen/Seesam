@@ -109,6 +109,16 @@ Tarkista palvelun tila:
 curl http://127.0.0.1:8000/health
 ```
 
+Hae palvelimen laitteisto- ja käyttöjärjestelmätiedot:
+
+```sh
+curl http://127.0.0.1:8000/system/specs
+```
+
+Vastaus sisältää palvelimen `hostname`-, `os_name`-, `kernel`-, CPU-, RAM-, levy-
+ja `local_ip`-tiedot. Jos `nvidia-smi` löytyy ja GPU on käytettävissä, mukana on
+myös `gpu_name`; GPU:n puuttuminen ei tee pyynnöstä virhettä.
+
 Lähetä chat-viesti:
 
 ```sh

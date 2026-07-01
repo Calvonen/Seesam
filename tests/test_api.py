@@ -71,6 +71,44 @@ def test_status_returns_server_status():
     }
 
 
+def test_system_specs_returns_server_hardware_specs():
+    client = TestClient(
+        create_app(
+            brain=FakeBrain(),
+            specs_collector=lambda: {
+                "hostname": "seesam",
+                "os_name": "Ubuntu 24.04 LTS",
+                "kernel": "6.8.0-test",
+                "cpu_model": "AMD Ryzen Test",
+                "cpu_cores_physical": 8,
+                "cpu_threads": 16,
+                "ram_total_gb": 31.25,
+                "disk_total_gb": 512.0,
+                "disk_free_gb": 128.5,
+                "gpu_name": "NVIDIA Test GPU",
+                "local_ip": "192.168.1.10",
+            },
+        )
+    )
+
+    response = client.get("/system/specs")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "hostname": "seesam",
+        "os_name": "Ubuntu 24.04 LTS",
+        "kernel": "6.8.0-test",
+        "cpu_model": "AMD Ryzen Test",
+        "cpu_cores_physical": 8,
+        "cpu_threads": 16,
+        "ram_total_gb": 31.25,
+        "disk_total_gb": 512.0,
+        "disk_free_gb": 128.5,
+        "gpu_name": "NVIDIA Test GPU",
+        "local_ip": "192.168.1.10",
+    }
+
+
 def test_speak_returns_wav_audio(monkeypatch):
     client = TestClient(create_app(brain=FakeBrain()))
     monkeypatch.setattr(tts, "synthesize_wav", lambda text: b"RIFF wav bytes")

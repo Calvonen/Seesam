@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
 from core.brain import Brain
+from core.specs import collect_system_specs
 from core.status import StatusCollector
 from core import stt, tts
 
@@ -37,11 +38,13 @@ class TranscribeResponse(BaseModel):
 def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
+    specs_collector=collect_system_specs,
 ) -> FastAPI:
     """Create the FastAPI app, optionally using an injected Brain for tests."""
     app = FastAPI(title="Seesam HTTP API")
     app.state.brain = brain
     app.state.status_collector = status_collector or StatusCollector.started_now()
+    app.state.specs_collector = specs_collector
 
     def get_brain() -> Brain:
         if app.state.brain is None:
@@ -57,6 +60,11 @@ def create_app(
     def status() -> dict[str, object]:
         """Return server-only runtime status."""
         return app.state.status_collector.collect()
+
+    @app.get("/system/specs")
+    def system_specs() -> dict[str, object]:
+        """Return server hardware and OS specifications."""
+        return app.state.specs_collector()
 
     @app.post("/chat", response_model=ChatResponse)
     def chat(request: ChatRequest) -> ChatResponse:

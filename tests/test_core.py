@@ -269,6 +269,64 @@ def test_conversation_history_is_limited_to_configured_length():
     assert latest_prompt.endswith("Käyttäjä: viesti 4")
 
 
+def test_collect_system_specs_returns_expected_fields_without_gpu(monkeypatch):
+    from core import specs
+
+    monkeypatch.setattr(specs.socket, "gethostname", lambda: "seesam")
+    monkeypatch.setattr(specs.platform, "release", lambda: "6.8.0-test")
+    monkeypatch.setattr(specs, "read_os_name", lambda: "Ubuntu 24.04 LTS")
+    monkeypatch.setattr(specs, "read_cpu_model", lambda: "AMD Ryzen Test")
+    monkeypatch.setattr(specs, "read_cpu_cores_physical", lambda: 8)
+    monkeypatch.setattr(specs, "read_cpu_threads", lambda: 16)
+    monkeypatch.setattr(specs, "read_ram_total_bytes", lambda: 32 * specs.GB)
+    monkeypatch.setattr(specs, "read_disk_total_bytes", lambda: 512 * specs.GB)
+    monkeypatch.setattr(specs, "read_disk_free_bytes", lambda: 128 * specs.GB)
+    monkeypatch.setattr(specs, "read_local_ip", lambda: "192.168.1.10")
+    monkeypatch.setattr(specs, "read_gpu_name", lambda: None)
+
+    assert specs.collect_system_specs() == {
+        "hostname": "seesam",
+        "os_name": "Ubuntu 24.04 LTS",
+        "kernel": "6.8.0-test",
+        "cpu_model": "AMD Ryzen Test",
+        "cpu_cores_physical": 8,
+        "cpu_threads": 16,
+        "ram_total_gb": 32.0,
+        "disk_total_gb": 512.0,
+        "disk_free_gb": 128.0,
+        "local_ip": "192.168.1.10",
+    }
+
+
+def test_collect_system_specs_includes_gpu_when_available(monkeypatch):
+    from core import specs
+
+    monkeypatch.setattr(specs.socket, "gethostname", lambda: "seesam")
+    monkeypatch.setattr(specs.platform, "release", lambda: "6.8.0-test")
+    monkeypatch.setattr(specs, "read_os_name", lambda: "Ubuntu 24.04 LTS")
+    monkeypatch.setattr(specs, "read_cpu_model", lambda: "AMD Ryzen Test")
+    monkeypatch.setattr(specs, "read_cpu_cores_physical", lambda: 8)
+    monkeypatch.setattr(specs, "read_cpu_threads", lambda: 16)
+    monkeypatch.setattr(specs, "read_ram_total_bytes", lambda: 32 * specs.GB)
+    monkeypatch.setattr(specs, "read_disk_total_bytes", lambda: 512 * specs.GB)
+    monkeypatch.setattr(specs, "read_disk_free_bytes", lambda: 128 * specs.GB)
+    monkeypatch.setattr(specs, "read_local_ip", lambda: "192.168.1.10")
+    monkeypatch.setattr(specs, "read_gpu_name", lambda: "NVIDIA Test GPU")
+
+    assert specs.collect_system_specs()["gpu_name"] == "NVIDIA Test GPU"
+
+
+def test_read_gpu_name_returns_none_when_nvidia_smi_missing(monkeypatch):
+    from core import specs
+
+    def fail_run(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(specs.subprocess, "run", fail_run)
+
+    assert specs.read_gpu_name() is None
+
+
 def test_transcribe_audio_uses_faster_whisper_with_finnish_default(monkeypatch):
     from core import stt
 

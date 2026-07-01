@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from core.brain import Brain, CONVERSATION_HISTORY_LIMIT, MEMORY_PATH, load_personality
@@ -72,7 +73,11 @@ def test_memory_append_creates_missing_file_and_parent_directory(tmp_path):
 
     assert memory.append("uusi muisto") is True
 
-    assert memory_path.read_text(encoding="utf-8") == "uusi muisto\n"
+    saved_line = memory_path.read_text(encoding="utf-8")
+    assert re.match(
+        r"^M000001 \| \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} \| source=voice \| uusi muisto\n$",
+        saved_line,
+    )
     assert memory.load() == ["uusi muisto"]
 
 
@@ -90,6 +95,7 @@ def test_memory_command_saves_memory_without_ollama(tmp_path):
 
     assert answer == "Muistan tämän."
     assert memory.load() == ["Marko pitää kahvista"]
+    assert memory.entries()[0].id == "M000001"
     assert client.calls == []
 
 
@@ -179,6 +185,18 @@ def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path)
     assert client.calls == []
 
 
+def test_memory_list_command_accepts_show_memories_phrase_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    memory.append("Marko pitää teestä")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("näytä muistot")
+
+    assert answer == "- Marko pitää teestä"
+    assert client.calls == []
+
+
 def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
     client = FakeOllamaClient()
     memory = Memory(tmp_path / "marko.local.txt")
@@ -187,6 +205,91 @@ def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
     answer = brain.respond("mitä muistat")
 
     assert answer == "Muistissa ei ole vielä mitään."
+    assert client.calls == []
+
+
+def test_latest_memory_list_command_returns_five_latest_numbered_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    for index in range(1, 7):
+        memory.append(f"muisto {index}")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("näytä viimeisimmät muistot")
+
+    assert answer.splitlines() == [
+        "1. M000006: muisto 6",
+        "2. M000005: muisto 5",
+        "3. M000004: muisto 4",
+        "4. M000003: muisto 3",
+        "5. M000002: muisto 2",
+    ]
+    assert client.calls == []
+
+
+def test_delete_latest_memory_command_removes_latest_and_reports_it_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    memory.append("ensimmäinen")
+    memory.append("toinen")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("poista viimeisin muisto")
+
+    assert answer == "Poistin viimeisimmän muiston: M000002: toinen"
+    assert memory.load() == ["ensimmäinen"]
+    assert client.calls == []
+
+
+def test_undo_latest_memory_command_is_same_safe_delete_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    memory.append("väärin kuultu")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("peru viimeisin muisto")
+
+    assert answer == "Poistin viimeisimmän muiston: M000001: väärin kuultu"
+    assert memory.load() == []
+    assert client.calls == []
+
+
+def test_delete_latest_memory_command_handles_empty_memory_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("poista viimeisin muisto")
+
+    assert answer == "En löytänyt poistettavaa muistoa."
+    assert memory.load() == []
+    assert client.calls == []
+
+
+def test_delete_memory_by_latest_list_number_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    for text in ["vanhin", "keskimmäinen", "uusin"]:
+        memory.append(text)
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("poista muisto numero 2")
+
+    assert answer == "Poistin muiston numero 2: M000002: keskimmäinen"
+    assert memory.load() == ["vanhin", "uusin"]
+    assert client.calls == []
+
+
+def test_delete_memory_by_latest_list_number_reports_missing_number_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "marko.local.txt")
+    memory.append("ainoa")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("poista muisto numero 2")
+
+    assert answer == "En löytänyt muistia tuolla numerolla. Näytä viimeisimmät muistot ja valitse numero listalta."
+    assert memory.load() == ["ainoa"]
     assert client.calls == []
 
 

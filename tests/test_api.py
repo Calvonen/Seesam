@@ -4,6 +4,8 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from core import stt, tts
+from core.brain import Brain
+from core.memory import Memory
 from core.api import create_app
 
 
@@ -11,9 +13,22 @@ class FakeBrain:
     def __init__(self):
         self.messages = []
 
-    def respond(self, message):
+    def handle_local_command(self, message):
+        return None
+
+    def is_memory_command(self, message):
+        return False
+
+    def respond_with_ai(self, message):
         self.messages.append(message)
         return f"echo: {message}"
+
+    def respond(self, message):
+        local_response = self.handle_local_command(message)
+        if local_response is not None:
+            return local_response
+
+        return self.respond_with_ai(message)
 
 
 class FakeStatusCollector:
@@ -176,7 +191,7 @@ def test_transcribe_returns_json_error_when_stt_unavailable(monkeypatch):
     }
 
 
-def test_chat_uses_injected_brain_and_returns_answer():
+def test_chat_uses_injected_brain_and_returns_answer(capsys):
     brain = FakeBrain()
     client = TestClient(create_app(brain=brain))
 
@@ -185,6 +200,30 @@ def test_chat_uses_injected_brain_and_returns_answer():
     assert response.status_code == 200
     assert response.json() == {"answer": "echo: moro"}
     assert brain.messages == ["moro"]
+    assert "API message sent to AI" in capsys.readouterr().out
+
+
+def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
+    class FakeOllamaClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, prompt, system_prompt):
+            self.calls.append((prompt, system_prompt))
+            return "AI vastaus"
+
+    ollama = FakeOllamaClient()
+    memory = Memory(tmp_path / "memory" / "marko.local.txt")
+    memory.append("Marko pitää kahvista")
+    brain = Brain(client=ollama, personality="persoonallisuus", memory=memory)
+    client = TestClient(create_app(brain=brain))
+
+    response = client.post("/chat", json={"message": "mitä muistat"})
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "- Marko pitää kahvista"}
+    assert ollama.calls == []
+    assert "API memory command handled locally: mitä muistat" in capsys.readouterr().out
 
 
 def test_chat_requires_message_field():

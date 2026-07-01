@@ -69,7 +69,15 @@ def create_app(
     @app.post("/chat", response_model=ChatResponse)
     def chat(request: ChatRequest) -> ChatResponse:
         """Return Seesam's answer for one chat message."""
-        answer = get_brain().respond(request.message)
+        brain = get_brain()
+        local_answer = brain.handle_local_command(request.message)
+        if local_answer is not None:
+            if brain.is_memory_command(request.message):
+                print(f"API memory command handled locally: {request.message}")
+            return ChatResponse(answer=local_answer)
+
+        print("API message sent to AI")
+        answer = brain.respond_with_ai(request.message)
         return ChatResponse(answer=answer)
 
     @app.post("/speak")

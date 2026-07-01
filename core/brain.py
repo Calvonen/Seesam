@@ -15,11 +15,17 @@ from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, Ollama
 PERSONALITY_PATH = PROJECT_ROOT / "personality" / "seesam.txt"
 MEMORY_PATH = PROJECT_ROOT / "memory" / "marko.local.txt"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
-MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti)\s*$", re.IGNORECASE)
+MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*(?:mitä muistat|näytä muisti|näytä muistot)\s*$", re.IGNORECASE)
+LATEST_MEMORY_LIST_COMMAND_PATTERN = re.compile(r"^\s*näytä viimeisimmät muistot\s*$", re.IGNORECASE)
+DELETE_LATEST_MEMORY_COMMAND_PATTERN = re.compile(r"^\s*(?:poista|peru) viimeisin muisto\s*$", re.IGNORECASE)
+DELETE_MEMORY_NUMBER_COMMAND_PATTERN = re.compile(r"^\s*poista muisto numero\s+(?P<number>\d+)\s*$", re.IGNORECASE)
 CONVERSATION_HISTORY_LIMIT = 6
+LATEST_MEMORY_LIMIT = 5
 MEMORY_RESPONSE = "Muistan tämän."
 EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
+EMPTY_MEMORY_DELETE_RESPONSE = "En löytänyt poistettavaa muistoa."
+MEMORY_NUMBER_NOT_FOUND_RESPONSE = "En löytänyt muistia tuolla numerolla. Näytä viimeisimmät muistot ja valitse numero listalta."
 
 
 def load_personality(path: Path = PERSONALITY_PATH) -> str:
@@ -53,18 +59,47 @@ class Brain:
 
     def respond(self, user_input: str) -> str:
         """Return Seesam's response to one terminal-chat input."""
+        local_response = self.handle_local_command(user_input)
+        if local_response is not None:
+            return local_response
+
+        return self.respond_with_ai(user_input)
+
+    def handle_local_command(self, user_input: str) -> str | None:
+        """Return a local command response, or None when AI should handle it."""
         memory_response = self._handle_memory_command(user_input)
         if memory_response is not None:
             return memory_response
+
+        latest_memory_list_response = self._handle_latest_memory_list_command(user_input)
+        if latest_memory_list_response is not None:
+            return latest_memory_list_response
+
+        memory_delete_response = self._handle_memory_delete_command(user_input)
+        if memory_delete_response is not None:
+            return memory_delete_response
 
         memory_list_response = self._handle_memory_list_command(user_input)
         if memory_list_response is not None:
             return memory_list_response
 
-        local_response = handle_local_command(user_input)
-        if local_response is not None:
-            return local_response
+        return handle_local_command(user_input)
 
+    def is_memory_command(self, user_input: str) -> bool:
+        """Return whether the input is a memory-management command."""
+        return any(
+            pattern.match(user_input) is not None
+            for pattern in (
+                MEMORY_COMMAND_PATTERN,
+                MEMORY_LIST_COMMAND_PATTERN,
+                LATEST_MEMORY_LIST_COMMAND_PATTERN,
+                DELETE_LATEST_MEMORY_COMMAND_PATTERN,
+                DELETE_MEMORY_NUMBER_COMMAND_PATTERN,
+            )
+        )
+
+    def respond_with_ai(self, user_input: str) -> str:
+        """Return an AI response and update short conversation history."""
         try:
             answer = self.client.generate(self._prompt_with_history(user_input), self._system_context())
         except OllamaError as exc:
@@ -88,6 +123,46 @@ class Brain:
             self.memory.append(memory_text)
 
         return MEMORY_RESPONSE
+
+    def _handle_latest_memory_list_command(self, user_input: str) -> str | None:
+        """Return the latest saved memories as a numbered list."""
+        if LATEST_MEMORY_LIST_COMMAND_PATTERN.match(user_input) is None:
+            return None
+
+        if self.memory is None:
+            return EMPTY_MEMORY_LIST_RESPONSE
+
+        memories = self.memory.latest_text(LATEST_MEMORY_LIMIT)
+        if not memories:
+            return EMPTY_MEMORY_LIST_RESPONSE
+
+        return memories
+
+    def _handle_memory_delete_command(self, user_input: str) -> str | None:
+        """Delete one memory through a conservative local command."""
+        if self.memory is None:
+            if DELETE_LATEST_MEMORY_COMMAND_PATTERN.match(user_input) is not None:
+                return EMPTY_MEMORY_DELETE_RESPONSE
+            if DELETE_MEMORY_NUMBER_COMMAND_PATTERN.match(user_input) is not None:
+                return MEMORY_NUMBER_NOT_FOUND_RESPONSE
+            return None
+
+        if DELETE_LATEST_MEMORY_COMMAND_PATTERN.match(user_input) is not None:
+            deleted = self.memory.delete_latest()
+            if deleted is None:
+                return EMPTY_MEMORY_DELETE_RESPONSE
+
+            return f"Poistin viimeisimmän muiston: {deleted.label}"
+
+        match = DELETE_MEMORY_NUMBER_COMMAND_PATTERN.match(user_input)
+        if match is None:
+            return None
+
+        deleted = self.memory.delete_latest_number(int(match.group("number")), LATEST_MEMORY_LIMIT)
+        if deleted is None:
+            return MEMORY_NUMBER_NOT_FOUND_RESPONSE
+
+        return f"Poistin muiston numero {match.group('number')}: {deleted.label}"
 
     def _handle_memory_list_command(self, user_input: str) -> str | None:
         """Return saved memories from a local command when requested."""

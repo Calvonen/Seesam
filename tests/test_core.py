@@ -1,9 +1,21 @@
 import re
 from pathlib import Path
 
-from core.brain import Brain, CONVERSATION_HISTORY_LIMIT, MEMORY_PATH, load_personality
+from core.brain import (
+    ASSISTANT_IDENTITY_PATH,
+    EPISODE_LOG_PATH,
+    LEGACY_MARKO_MEMORY_PATH,
+    LEGACY_MEMORY_DIR,
+    Brain,
+    CONVERSATION_HISTORY_LIMIT,
+    MEMORY_PATH,
+    USER_PROFILE_PATH,
+    initialize_local_memory_files,
+    load_personality,
+)
 from core.commands import handle_local_command
-from core.memory import Memory
+from core.memory import AssistantIdentityMemory, EpisodeLog, Memory, UserProfileMemory
+from core.system_status import SystemStatus, format_duration
 
 
 class FakeOllamaClient:
@@ -15,6 +27,19 @@ class FakeOllamaClient:
         return f"Vastaus {len(self.calls)}"
 
 
+class FakeSystemStatus:
+    def __init__(self):
+        self.answers = {
+            "paljonko kello on": "Kello on 12:00:00.",
+            "miten kone voi": "Kone voi hyvin.",
+            "näytä serverin speksit": "Hostname: seesam",
+            "onko ollama käynnissä": "Ollama on käynnissä.",
+        }
+
+    def answer(self, message):
+        return self.answers.get(message)
+
+
 def test_wake_command_returns_local_response_without_ollama():
     client = FakeOllamaClient()
     brain = Brain(client=client, personality="persoonallisuus")
@@ -22,6 +47,102 @@ def test_wake_command_returns_local_response_without_ollama():
     answer = brain.respond("Hei seesam aukene nyt")
 
     assert answer == "Kuuntelen."
+    assert client.calls == []
+
+
+def test_system_status_commands_are_handled_without_ollama():
+    client = FakeOllamaClient()
+    brain = Brain(
+        client=client,
+        personality="vastaa suomeksi",
+        system_status=FakeSystemStatus(),
+    )
+
+    assert brain.respond("paljonko kello on") == "Kello on 12:00:00."
+    assert brain.respond("miten kone voi") == "Kone voi hyvin."
+    assert brain.respond("näytä serverin speksit") == "Hostname: seesam"
+    assert brain.respond("onko ollama käynnissä") == "Ollama on käynnissä."
+    assert client.calls == []
+
+
+def test_format_duration_returns_compact_finnish_uptime():
+    assert format_duration(65) == "1 min"
+    assert format_duration(3660) == "1 h 1 min"
+    assert format_duration(90000) == "1 pv 1 h"
+
+
+def test_system_status_keyword_matcher_recognizes_natural_time_phrases():
+    status = SystemStatus(started_at=0)
+
+    for phrase in [
+        "mitä kello on",
+        "paljonko kello",
+        "paljonko on kello",
+        "kellonaika",
+        "mikä aika nyt on",
+    ]:
+        assert status.match_kind(phrase) == "time"
+        assert status.debug_match_name(phrase) == "time"
+
+
+def test_system_status_keyword_matcher_recognizes_machine_parts_without_memory_confusion():
+    status = SystemStatus(started_at=0)
+
+    assert status.match_kind("mikä cpu koneessa") == "cpu"
+    assert status.match_kind("mikä prosessori koneessa") == "cpu"
+    assert status.match_kind("mikä suoritin koneessa") == "cpu"
+    assert status.match_kind("mikä gpu koneessa") == "gpu"
+    assert status.match_kind("mikä näytönohjain koneessa") == "gpu"
+    assert status.match_kind("mikä grafiikkakortti koneessa") == "gpu"
+    assert status.match_kind("mikä näyttis koneessa") == "gpu"
+    assert status.match_kind("entä ram") == "ram"
+    assert status.match_kind("ram") == "ram"
+    assert status.match_kind("paljonko keskusmuisti koneessa") == "ram"
+    assert status.match_kind("mitä muistat") is None
+    assert status.match_kind("näytä muisti") is None
+
+
+def test_natural_system_status_phrases_are_handled_without_ollama(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 12.5,
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "gpu": {
+                "name": "NVIDIA Test GPU",
+                "memory_used_mb": 100,
+                "memory_total_mb": 1000,
+                "temperature_c": 40,
+                "utilization_percent": 5,
+            },
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(
+        client=client,
+        personality="vastaa suomeksi",
+        system_status=SystemStatus(started_at=0),
+    )
+
+    assert brain.respond("mitä kello on").startswith("Kello on ")
+    assert "AMD Test" in brain.respond("mikä cpu koneessa")
+    assert "NVIDIA Test GPU" in brain.respond("mikä gpu koneessa")
+    assert "RAM-muistia" in brain.respond("entä ram")
+    assert "RAM-muistia" in brain.respond("ram")
     assert client.calls == []
 
 
@@ -51,7 +172,7 @@ def test_command_helper_is_case_insensitive():
 
 
 def test_memory_load_ignores_empty_lines_and_append_saves_line(tmp_path):
-    memory_path = tmp_path / "memory" / "marko.local.txt"
+    memory_path = tmp_path / "memory" / "memories.local.txt"
     memory_path.parent.mkdir()
     memory_path.write_text("ensimmäinen\n\n   \ntoinen  \n", encoding="utf-8")
     memory = Memory(memory_path)
@@ -66,7 +187,7 @@ def test_memory_load_ignores_empty_lines_and_append_saves_line(tmp_path):
 
 
 def test_memory_append_creates_missing_file_and_parent_directory(tmp_path):
-    memory_path = tmp_path / "missing" / "memory" / "marko.local.txt"
+    memory_path = tmp_path / "missing" / "memory" / "memories.local.txt"
     memory = Memory(memory_path)
 
     assert memory_path.exists() is False
@@ -81,14 +202,170 @@ def test_memory_append_creates_missing_file_and_parent_directory(tmp_path):
     assert memory.load() == ["uusi muisto"]
 
 
+def test_assistant_identity_creates_default_local_yaml_file(tmp_path):
+    memory_path = tmp_path / "memory" / "seesam.local.yaml"
+    memory = AssistantIdentityMemory(memory_path)
+
+    assert memory_path.exists() is False
+
+    assert memory.load() == {
+        "name": "Seesam",
+        "aliases": ["Sam", "CSAM"],
+        "role": "paikallinen ääniavustaja",
+        "language": "fi",
+        "server": "Seesam-palvelin",
+        "backend": "Ollama",
+    }
+    saved_identity = memory_path.read_text(encoding="utf-8")
+    assert "name: Seesam" in saved_identity
+    assert "aliases:" in saved_identity
+    assert "  - Sam" in saved_identity
+    assert "  - CSAM" in saved_identity
+
+
+def test_system_context_includes_separated_identity_and_user_profile(tmp_path):
+    client = FakeOllamaClient()
+    assistant_path = tmp_path / "memory" / "seesam.local.yaml"
+    user_path = tmp_path / "memory" / "marko.local.yaml"
+    assistant_path.parent.mkdir()
+    assistant_path.write_text(
+        "name: Seesam\nrole: paikallinen ääniavustaja\nlanguage: fi\nserver: testipalvelin\nbackend: Ollama\n",
+        encoding="utf-8",
+    )
+    user_path.write_text(
+        "name: Marko\nlanguage: fi\nresponse_style: lyhyt\nimportant_preferences:\n  - pitää selkeydestä\ndeep_memory:\n  []\n",
+        encoding="utf-8",
+    )
+    brain = Brain(
+        client=client,
+        personality="vastaa suomeksi",
+        assistant_identity=AssistantIdentityMemory(assistant_path),
+        user_profile=UserProfileMemory(user_path),
+    )
+
+    system_context = brain._system_context()
+
+    assert system_context.startswith("vastaa suomeksi")
+    assert "Sinun oma nimesi on Seesam" in system_context
+    assert "Nimen aliakset ovat: Sam, CSAM" in system_context
+    assert "Palvelinkone on testipalvelin" in system_context
+    assert "Käyttäjän nimi: Marko" in system_context
+    assert "Älä ota omaa nimeäsi käyttäjän muistista" in system_context
+
+
+def test_assistant_identity_questions_use_local_yaml_without_ollama_or_user_memory(tmp_path, capsys):
+    client = FakeOllamaClient()
+    assistant_path = tmp_path / "memory" / "seesam.local.yaml"
+    user_path = tmp_path / "memory" / "marko.local.yaml"
+    assistant_path.parent.mkdir()
+    assistant_path.write_text(
+        "name: Seesam\naliases:\n  - Sam\n  - CSAM\nrole: paikallinen ääniavustaja\nlanguage: fi\nserver: testipalvelin\nbackend: Ollama\n",
+        encoding="utf-8",
+    )
+    user_path.write_text(
+        "name: Marko\nlanguage: fi\nresponse_style: lyhyt\nimportant_preferences:\n  []\ndeep_memory:\n  []\n",
+        encoding="utf-8",
+    )
+    brain = Brain(
+        client=client,
+        personality="vastaa suomeksi",
+        assistant_identity=AssistantIdentityMemory(assistant_path),
+        user_profile=UserProfileMemory(user_path),
+    )
+
+    answers = [
+        brain.respond("kuka olet"),
+        brain.respond("kuka sinä olet"),
+        brain.respond("mikä sinun nimesi on"),
+        brain.respond("kuka on Seesam"),
+        brain.respond("kuka on Sam"),
+        brain.respond("kuka on CSAM"),
+    ]
+
+    assert answers == ["Olen Seesam, paikallinen ääniavustaja."] * 6
+    assert client.calls == []
+    assert "[IDENTITY] using memory/seesam.local.yaml" in capsys.readouterr().out
+    assert "Sam" not in UserProfileMemory(user_path).text()
+    assert "CSAM" not in UserProfileMemory(user_path).text()
+
+
+def _patch_memory_paths(monkeypatch, memory_dir):
+    from core import brain as brain_module
+
+    monkeypatch.setattr(brain_module, "ASSISTANT_IDENTITY_PATH", memory_dir / "seesam.local.yaml")
+    monkeypatch.setattr(brain_module, "USER_PROFILE_PATH", memory_dir / "marko.local.yaml")
+    monkeypatch.setattr(brain_module, "MEMORY_PATH", memory_dir / "memories.local.txt")
+    monkeypatch.setattr(brain_module, "EPISODE_LOG_PATH", memory_dir / "episodes.local.log")
+    monkeypatch.setattr(brain_module, "LEGACY_MARKO_MEMORY_PATH", memory_dir / "marko.local.txt")
+    monkeypatch.setattr(brain_module, "LEGACY_MEMORY_DIR", memory_dir / "legacy")
+
+
+def test_initialize_local_memory_files_archives_legacy_marko_txt_after_migration(monkeypatch, tmp_path):
+    memory_dir = tmp_path / "memory"
+    _patch_memory_paths(monkeypatch, memory_dir)
+    legacy_path = memory_dir / "marko.local.txt"
+    legacy_path.parent.mkdir()
+    legacy_path.write_text(
+        "M000001 | 2026-01-01T12:00:00 | source=voice | vanha tavallinen muisto\n"
+        "käyttäjä pitää lyhyistä vastauksista\n"
+        "Minun nimeni on Seesam\n",
+        encoding="utf-8",
+    )
+
+    initialize_local_memory_files()
+
+    archived_path = memory_dir / "legacy" / "marko.local.txt"
+    assert legacy_path.exists() is False
+    assert archived_path.read_text(encoding="utf-8").startswith("M000001")
+    assert "vanha tavallinen muisto" in (memory_dir / "memories.local.txt").read_text(encoding="utf-8")
+    assert "käyttäjä pitää lyhyistä vastauksista" in UserProfileMemory(memory_dir / "marko.local.yaml").text()
+
+    initialize_local_memory_files()
+
+    saved_lines = (memory_dir / "memories.local.txt").read_text(encoding="utf-8").splitlines()
+    assert saved_lines == ["M000001 | 2026-01-01T12:00:00 | source=voice | vanha tavallinen muisto"]
+
+
+def test_initialize_local_memory_files_ignores_archived_legacy_marko_txt(monkeypatch, tmp_path):
+    memory_dir = tmp_path / "memory"
+    _patch_memory_paths(monkeypatch, memory_dir)
+    archived_path = memory_dir / "legacy" / "marko.local.txt"
+    archived_path.parent.mkdir(parents=True)
+    archived_path.write_text("M000001 | 2026-01-01T12:00:00 | source=voice | arkistoitu muisto\n", encoding="utf-8")
+
+    initialize_local_memory_files()
+
+    assert (memory_dir / "memories.local.txt").read_text(encoding="utf-8") == ""
+    assert "arkistoitu muisto" not in UserProfileMemory(memory_dir / "marko.local.yaml").text()
+
 def test_default_memory_path_uses_untracked_local_file():
-    assert MEMORY_PATH.name == "marko.local.txt"
+    assert MEMORY_PATH.name == "memories.local.txt"
     assert MEMORY_PATH.parent.name == "memory"
+
+
+def test_default_assistant_identity_path_uses_untracked_local_yaml_file():
+    assert ASSISTANT_IDENTITY_PATH.name == "seesam.local.yaml"
+    assert ASSISTANT_IDENTITY_PATH.parent.name == "memory"
+
+
+def test_default_user_profile_path_uses_untracked_local_yaml_file():
+    assert USER_PROFILE_PATH.name == "marko.local.yaml"
+    assert USER_PROFILE_PATH.parent.name == "memory"
+
+
+def test_default_episode_log_path_uses_untracked_local_log_file():
+    assert EPISODE_LOG_PATH.name == "episodes.local.log"
+    assert EPISODE_LOG_PATH.parent.name == "memory"
+
+
+def test_default_legacy_marko_path_is_not_runtime_memory():
+    assert LEGACY_MARKO_MEMORY_PATH.name == "marko.local.txt"
+    assert LEGACY_MEMORY_DIR.name == "legacy"
 
 
 def test_memory_command_saves_memory_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä: Marko pitää kahvista")
@@ -101,7 +378,7 @@ def test_memory_command_saves_memory_without_ollama(tmp_path):
 
 def test_memory_command_accepts_no_space_after_colon_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä:Marko pitää teestä")
@@ -113,7 +390,7 @@ def test_memory_command_accepts_no_space_after_colon_without_ollama(tmp_path):
 
 def test_memory_command_accepts_tama_typo_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tama : Marko pitää pullasta")
@@ -125,7 +402,7 @@ def test_memory_command_accepts_tama_typo_without_ollama(tmp_path):
 
 def test_memory_command_accepts_tama_umlaut_typo_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tamä:Marko pitää korvapuusteista")
@@ -137,7 +414,7 @@ def test_memory_command_accepts_tama_umlaut_typo_without_ollama(tmp_path):
 
 def test_memory_command_is_case_insensitive_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("MUISTA TÄMÄ: Marko pitää kahvista")
@@ -149,7 +426,7 @@ def test_memory_command_is_case_insensitive_without_ollama(tmp_path):
 
 def test_empty_memory_command_returns_finnish_error_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("muista tämä:   ")
@@ -162,7 +439,7 @@ def test_empty_memory_command_returns_finnish_error_without_ollama(tmp_path):
 
 def test_memory_list_command_returns_saved_memories_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("Marko pitää kahvista")
     memory.append("Markon koira on Tessu")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
@@ -173,9 +450,44 @@ def test_memory_list_command_returns_saved_memories_without_ollama(tmp_path):
     assert client.calls == []
 
 
+def test_memory_list_command_combines_deep_profile_and_ordinary_memories(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "memories.local.txt")
+    memory.append("Marko pitää kahvista")
+    user_profile_path = tmp_path / "marko.local.yaml"
+    user_profile = UserProfileMemory(user_profile_path)
+    user_profile.append_deep_memory("käyttäjä haluaa lyhyitä vastauksia")
+    brain = Brain(
+        client=client,
+        personality="persoonallisuus",
+        memory=memory,
+        user_profile=user_profile,
+    )
+
+    answer = brain.respond("mitä muistat")
+
+    assert "Käyttäjän syvä muisti:" in answer
+    assert "käyttäjä haluaa lyhyitä vastauksia" in answer
+    assert "Tavalliset muistot:" in answer
+    assert "- Marko pitää kahvista" in answer
+    assert client.calls == []
+
+
+def test_deep_memory_command_saves_to_user_profile_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    user_profile = UserProfileMemory(tmp_path / "marko.local.yaml")
+    brain = Brain(client=client, personality="persoonallisuus", user_profile=user_profile)
+
+    answer = brain.respond("tallenna syvään muistiin: käyttäjä haluaa lyhyitä vastauksia")
+
+    assert answer == "Tallensin tämän syvään muistiin."
+    assert "käyttäjä haluaa lyhyitä vastauksia" in user_profile.text()
+    assert client.calls == []
+
+
 def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("Marko pitää teestä")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
@@ -187,7 +499,7 @@ def test_memory_list_command_accepts_show_memory_phrase_without_ollama(tmp_path)
 
 def test_memory_list_command_accepts_show_memories_phrase_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("Marko pitää teestä")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
@@ -199,7 +511,7 @@ def test_memory_list_command_accepts_show_memories_phrase_without_ollama(tmp_pat
 
 def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("mitä muistat")
@@ -210,7 +522,7 @@ def test_memory_list_command_returns_empty_message_without_ollama(tmp_path):
 
 def test_latest_memory_list_command_returns_five_latest_numbered_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     for index in range(1, 7):
         memory.append(f"muisto {index}")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
@@ -227,9 +539,34 @@ def test_latest_memory_list_command_returns_five_latest_numbered_without_ollama(
     assert client.calls == []
 
 
+def test_latest_memory_command_returns_latest_ordinary_memory_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "memories.local.txt")
+    memory.append("ensimmäinen")
+    memory.append("uusin")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("mikä on viimeisin muistosi")
+
+    assert answer == "M000002: uusin"
+    assert client.calls == []
+
+
+def test_latest_saved_memory_command_returns_latest_ordinary_memory_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "memories.local.txt")
+    memory.append("uusin")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("mikä on viimeisin tallennettu muistosi")
+
+    assert answer == "M000001: uusin"
+    assert client.calls == []
+
+
 def test_delete_latest_memory_command_removes_latest_and_reports_it_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("ensimmäinen")
     memory.append("toinen")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
@@ -243,7 +580,7 @@ def test_delete_latest_memory_command_removes_latest_and_reports_it_without_olla
 
 def test_undo_latest_memory_command_is_same_safe_delete_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("väärin kuultu")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
@@ -254,9 +591,35 @@ def test_undo_latest_memory_command_is_same_safe_delete_without_ollama(tmp_path)
     assert client.calls == []
 
 
+def test_forget_latest_memory_command_is_same_safe_delete_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "memories.local.txt")
+    memory.append("väärin kuultu")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("unohda viimeisin muisto")
+
+    assert answer == "Poistin viimeisimmän muiston: M000001: väärin kuultu"
+    assert memory.load() == []
+    assert client.calls == []
+
+
+def test_delete_latest_memory_yours_command_is_same_safe_delete_without_ollama(tmp_path):
+    client = FakeOllamaClient()
+    memory = Memory(tmp_path / "memories.local.txt")
+    memory.append("väärin kuultu")
+    brain = Brain(client=client, personality="persoonallisuus", memory=memory)
+
+    answer = brain.respond("poista viimeisin muistosi")
+
+    assert answer == "Poistin viimeisimmän muiston: M000001: väärin kuultu"
+    assert memory.load() == []
+    assert client.calls == []
+
+
 def test_delete_latest_memory_command_handles_empty_memory_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
     answer = brain.respond("poista viimeisin muisto")
@@ -268,7 +631,7 @@ def test_delete_latest_memory_command_handles_empty_memory_without_ollama(tmp_pa
 
 def test_delete_memory_by_latest_list_number_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     for text in ["vanhin", "keskimmäinen", "uusin"]:
         memory.append(text)
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
@@ -282,7 +645,7 @@ def test_delete_memory_by_latest_list_number_without_ollama(tmp_path):
 
 def test_delete_memory_by_latest_list_number_reports_missing_number_without_ollama(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("ainoa")
     brain = Brain(client=client, personality="persoonallisuus", memory=memory)
 
@@ -295,7 +658,7 @@ def test_delete_memory_by_latest_list_number_reports_missing_number_without_olla
 
 def test_non_local_input_includes_memory_context(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     memory.append("Marko pitää kahvista")
     brain = Brain(client=client, personality="vastaa suomeksi", memory=memory)
 
@@ -305,16 +668,14 @@ def test_non_local_input_includes_memory_context(tmp_path):
     assert client.calls == [("moro", brain._system_context())]
     system_context = client.calls[0][1]
     assert system_context.startswith("vastaa suomeksi")
-    assert "Sinulla on käytössäsi paikallinen muisti Markosta" in system_context
-    assert "sinun täytyy käyttää muistia vastauksessa" in system_context
-    assert "vastaa lyhyesti muistin perusteella" in system_context
+    assert "Tavalliset muista tämä -muistot" in system_context
     assert "Älä vastaa pelkällä tervehdyksellä" in system_context
-    assert "Muistettavaa Markosta:\n- Marko pitää kahvista" in system_context
+    assert "- Marko pitää kahvista" in system_context
 
 
 def test_system_context_omits_memory_instructions_when_memory_is_empty(tmp_path):
     client = FakeOllamaClient()
-    memory = Memory(tmp_path / "marko.local.txt")
+    memory = Memory(tmp_path / "memories.local.txt")
     brain = Brain(client=client, personality="vastaa suomeksi", memory=memory)
 
     assert brain._system_context() == "vastaa suomeksi"
@@ -370,6 +731,34 @@ def test_conversation_history_is_limited_to_configured_length():
     assert "Käyttäjä: viesti 1" in latest_prompt
     assert "Seesam: Vastaus 2" in latest_prompt
     assert latest_prompt.endswith("Käyttäjä: viesti 4")
+
+
+def test_system_status_collect_returns_requested_fields(monkeypatch, tmp_path):
+    from core import system_status
+
+    monkeypatch.setattr(system_status.socket, "gethostname", lambda: "seesam")
+    monkeypatch.setattr(system_status.platform, "release", lambda: "6.8.0-test")
+    monkeypatch.setattr(system_status, "read_os_name", lambda: "Ubuntu Test")
+    monkeypatch.setattr(system_status, "read_cpu_model", lambda: "AMD Test")
+    monkeypatch.setattr(system_status, "read_local_ip", lambda: "192.168.1.10")
+    monkeypatch.setattr(system_status, "read_temperatures", lambda: {"CPU": 45.5})
+    monkeypatch.setattr(system_status, "read_gpu_info", lambda: {"name": "NVIDIA Test GPU"})
+    monkeypatch.setattr(system_status, "read_service_status", lambda name: "active")
+    monkeypatch.setattr(system_status, "read_memory_file_status", lambda: {"memories.local.txt": "ok"})
+
+    status = SystemStatus(started_at=0, version="test-version")
+    data = status.collect()
+
+    assert data["hostname"] == "seesam"
+    assert data["os_name"] == "Ubuntu Test"
+    assert data["kernel"] == "6.8.0-test"
+    assert data["cpu_model"] == "AMD Test"
+    assert data["ram_total_gb"] >= 0
+    assert data["disk_free_gb"] >= 0
+    assert data["temperatures_c"] == {"CPU": 45.5}
+    assert data["gpu"] == {"name": "NVIDIA Test GPU"}
+    assert data["ollama_status"] == "active"
+    assert data["version"] == "test-version"
 
 
 def test_collect_system_specs_returns_expected_fields_without_gpu(monkeypatch):

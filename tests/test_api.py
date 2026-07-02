@@ -51,13 +51,36 @@ class FakeStatusCollector:
         }
 
 
-def test_health_returns_ok():
-    client = TestClient(create_app(brain=FakeBrain()))
+class FakeSystemStatus:
+    def health(self):
+        return {
+            "status": "ok",
+            "server_time": "2026-07-02T12:34:56+03:00",
+            "uptime": "1 h 2 min",
+            "memory_file_status": {"memories.local.txt": "ok"},
+            "ollama_status": "active",
+            "disk_free_gb": 128.5,
+            "ram_free_gb": 12.25,
+            "version": "test-version",
+        }
+
+
+def test_health_returns_ok_with_local_system_fields():
+    client = TestClient(create_app(brain=FakeBrain(), system_status=FakeSystemStatus()))
 
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {
+        "status": "ok",
+        "server_time": "2026-07-02T12:34:56+03:00",
+        "uptime": "1 h 2 min",
+        "memory_file_status": {"memories.local.txt": "ok"},
+        "ollama_status": "active",
+        "disk_free_gb": 128.5,
+        "ram_free_gb": 12.25,
+        "version": "test-version",
+    }
 
 
 def test_status_returns_server_status():
@@ -200,7 +223,11 @@ def test_chat_uses_injected_brain_and_returns_answer(capsys):
     assert response.status_code == 200
     assert response.json() == {"answer": "echo: moro"}
     assert brain.messages == ["moro"]
-    assert "API message sent to AI" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "[API CHAT RAW] moro" in output
+    assert "[STATUS MATCH] none" in output
+    assert "[LOCAL COMMAND MATCH] none" in output
+    assert "API message sent to AI" in output
 
 
 def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
@@ -213,7 +240,7 @@ def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
             return "AI vastaus"
 
     ollama = FakeOllamaClient()
-    memory = Memory(tmp_path / "memory" / "marko.local.txt")
+    memory = Memory(tmp_path / "memory" / "memories.local.txt")
     memory.append("Marko pitää kahvista")
     brain = Brain(client=ollama, personality="persoonallisuus", memory=memory)
     client = TestClient(create_app(brain=brain))
@@ -223,7 +250,56 @@ def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
     assert response.status_code == 200
     assert response.json() == {"answer": "- Marko pitää kahvista"}
     assert ollama.calls == []
-    assert "API memory command handled locally: mitä muistat" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "[API CHAT RAW] mitä muistat" in output
+    assert "[STATUS MATCH] none" in output
+    assert "[LOCAL COMMAND MATCH] memory_list" in output
+    assert "API memory command handled locally: mitä muistat" in output
+
+
+def test_chat_handles_system_status_command_locally(capsys):
+    class FakeLocalSystemStatus:
+        def command_name(self, message):
+            if message == "onko ollama käynnissä":
+                return "system_status"
+            return None
+
+        def debug_match_name(self, message):
+            if message == "onko ollama käynnissä":
+                return "ollama"
+            return "none"
+
+        def answer(self, message):
+            if message == "onko ollama käynnissä":
+                return "Ollama on käynnissä."
+            return None
+
+    class FakeOllamaClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, prompt, system_prompt):
+            self.calls.append((prompt, system_prompt))
+            return "AI vastaus"
+
+    ollama = FakeOllamaClient()
+    brain = Brain(
+        client=ollama,
+        personality="persoonallisuus",
+        system_status=FakeLocalSystemStatus(),
+    )
+    client = TestClient(create_app(brain=brain))
+
+    response = client.post("/chat", json={"message": "onko ollama käynnissä"})
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "Ollama on käynnissä."}
+    assert ollama.calls == []
+    output = capsys.readouterr().out
+    assert "[API CHAT RAW] onko ollama käynnissä" in output
+    assert "[STATUS MATCH] ollama" in output
+    assert "[LOCAL COMMAND MATCH] system_status" in output
+    assert "API system status command handled locally: onko ollama käynnissä" in output
 
 
 def test_chat_requires_message_field():

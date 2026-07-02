@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from core.brain import Brain
 from core.specs import collect_system_specs
 from core.status import StatusCollector
+from core.system_status import SystemStatus
 from core import stt, tts
 
 
@@ -39,12 +40,14 @@ def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
     specs_collector=collect_system_specs,
+    system_status: SystemStatus | None = None,
 ) -> FastAPI:
     """Create the FastAPI app, optionally using an injected Brain for tests."""
     app = FastAPI(title="Seesam HTTP API")
     app.state.brain = brain
     app.state.status_collector = status_collector or StatusCollector.started_now()
     app.state.specs_collector = specs_collector
+    app.state.system_status = system_status or SystemStatus.started_now()
 
     def get_brain() -> Brain:
         if app.state.brain is None:
@@ -52,9 +55,9 @@ def create_app(
         return app.state.brain
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        """Return API health status."""
-        return {"status": "ok"}
+    def health() -> dict[str, object]:
+        """Return API health and local server status fields."""
+        return app.state.system_status.health()
 
     @app.get("/status")
     def status() -> dict[str, object]:
@@ -70,10 +73,21 @@ def create_app(
     def chat(request: ChatRequest) -> ChatResponse:
         """Return Seesam's answer for one chat message."""
         brain = get_brain()
+        print(f"[API CHAT RAW] {request.message}")
+        status_match = "none"
+        if hasattr(brain, "system_status_match_name"):
+            status_match = brain.system_status_match_name(request.message)
+        print(f"[STATUS MATCH] {status_match}")
+        command_name = "none"
+        if hasattr(brain, "local_command_name"):
+            command_name = brain.local_command_name(request.message) or "none"
+        print(f"[LOCAL COMMAND MATCH] {command_name}")
         local_answer = brain.handle_local_command(request.message)
         if local_answer is not None:
             if brain.is_memory_command(request.message):
                 print(f"API memory command handled locally: {request.message}")
+            elif brain.is_system_status_command(request.message):
+                print(f"API system status command handled locally: {request.message}")
             return ChatResponse(answer=local_answer)
 
         print("API message sent to AI")

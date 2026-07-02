@@ -161,18 +161,35 @@ aktivoidussa virtuaaliympäristössä komennolla `python -m core.main`.
 
 ## Paikallinen muisti
 
-Seesam lukee ja kirjoittaa Markon paikalliset muistot oletuksena tiedostoon
-`memory/marko.local.txt`. Tiedosto on yksityinen paikallinen muisti, eikä sitä
-commitoida Git-repositorioon. Tiedoston ei tarvitse olla olemassa etukäteen:
-Seesam luo sen ja `memory`-hakemiston ensimmäisen tallennuksen yhteydessä.
+Seesamin muisti on tiedostopohjainen ja käsin muokattava. Ajossa käytetään
+neljää paikallista tiedostoa:
 
-Muistin muoto on yksinkertainen: yksi muisto per rivi. Repositorion mukana
-tuleva `memory/marko.example.txt` on vain esimerkkitiedosto muistin muodosta.
-Voit halutessasi kopioida siitä lähtökohdan omaan paikalliseen muistiin:
+- `memory/seesam.local.yaml`: Seesamin oma identiteetti.
+- `memory/marko.local.yaml`: Markon käyttäjäprofiili ja syvä muisti.
+- `memory/memories.local.txt`: tavalliset `muista tämä` -muistot M000001-muodossa.
+- `memory/episodes.local.log`: aikaleimattu tapahtumaloki.
 
-```sh
-cp memory/marko.example.txt memory/marko.local.txt
-```
+Näitä `.local.*`-tiedostoja ei commitoida. Repositorion mukana tulevat vain
+esimerkkitiedostot `memory/seesam.example.yaml`, `memory/marko.example.yaml` ja
+`memory/memories.example.txt`. Katso tarkempi kuvaus tiedostosta `MEMORY.md`.
+
+## Paikallinen koneen tila
+
+Seesam vastaa koneen tilaa, kellonaikaa, speksejä ja Ollaman palvelutilaa
+koskeviin kysymyksiin paikallisesti ilman Ollama-kutsua. Tuettuja komentoja
+ovat esimerkiksi:
+
+- `paljonko kello on`
+- `mikä päivä tänään on`
+- `miten kone voi`
+- `näytä serverin speksit`
+- `paljonko levytilaa on`
+- `paljonko muistia on vapaana`
+- `mikä on prosessorin kuorma`
+- `onko ollama käynnissä`
+
+`/health` palauttaa myös serverin ajan, uptime-arvon, muistifileiden tilan,
+Ollaman tilan, vapaan levytilan, vapaan RAM-muistin ja version.
 
 ## Piper-puhe
 

@@ -1,0 +1,8 @@
+name: Seesam
+aliases:
+  - Sam
+  - CSAM
+role: paikallinen ääniavustaja
+language: fi
+server: Seesam-palvelin
+backend: Ollama

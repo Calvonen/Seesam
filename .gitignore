@@ -3,5 +3,9 @@ __pycache__/
 *.py[cod]
 .env
 memory/*.local.txt
+memory/*.local.json
 
 .venv/
+*.log
+memory/*.local.yaml
+memory/*.local.log

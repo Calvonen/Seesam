@@ -91,6 +91,57 @@ vastaa heti `Seesam: Kuuntelen.` ilman Ollama-kutsua. Muut viestit, kuten
 Lopeta komennolla `exit`, `quit`, `lopeta` tai näppäinyhdistelmällä Ctrl-D.
 
 
+## Media audio / Steljes NS3
+
+Steljes NS3 -kaiuttimen voi yhdistää PipeWire/WirePlumber-ääniulostuloksi
+apuskripteillä. Kaiuttimen pitää olla paritettu Linuxissa etukäteen.
+
+Tee skripteistä ajettavia, jos tiedostooikeudet eivät ole vielä päällä:
+
+```sh
+chmod +x ./scripts/steljes_connect.sh ./scripts/steljes_test.sh ./scripts/test_media_output.py
+```
+
+Yhdistä kaiutin, aseta se oletusulostuloksi ja säädä äänenvoimakkuus noin
+40 prosenttiin:
+
+```sh
+./scripts/steljes_connect.sh
+```
+
+Aja lyhyt stereotesti:
+
+```sh
+./scripts/steljes_test.sh
+```
+
+Testaa mediaulostulon varmistus audio managerin kautta:
+
+```sh
+./scripts/test_media_output.py
+```
+
+Jos yhdistäminen epäonnistuu, skripti tulostaa missä vaiheessa virhe tapahtui
+ja näyttää tarvittaessa nykyisen `wpctl status` -tulosteen.
+
+
+Audio managerin laiteasetukset ovat tiedostossa `audio/audio_devices.json`.
+`voice_output.mode` on `api`, joten Seesamin keskusteluääni pysyy nykyisessä
+API-/TTS-polussa. `media_output.default` on `steljes_ns3`, ja Steljes NS3 on vain
+mediaäänelle. Tulevat soittokomennot voivat kutsua `ensure_media_output()` tai
+`ensure_default_media_output()` ennen mediaäänen toistoa. Spotify API
+-integraatiota ei ole vielä lisätty.
+
+Seesamin paikalliset komennot kaiuttimen yhdistämiseen ovat:
+
+```sh
+kaiuttimet päälle
+yhdistä kaiuttimet
+steljes päälle
+media päälle
+```
+
+
 ## HTTP API
 
 Seesam sisältää myös FastAPI-pohjaisen HTTP-rajapinnan. Asenna ensin

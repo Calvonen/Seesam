@@ -1,0 +1,22 @@
+{
+  "voice_output": {
+    "mode": "api"
+  },
+  "media_output": {
+    "default": "steljes_ns3"
+  },
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.4,
+      "aliases": [
+        "steljes",
+        "kaiuttimet",
+        "olohuone",
+        "työpöytä"
+      ]
+    }
+  }
+}

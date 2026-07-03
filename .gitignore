@@ -9,3 +9,4 @@ memory/*.local.json
 *.log
 memory/*.local.yaml
 memory/*.local.log
+memory/legacy/

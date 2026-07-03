@@ -1,15 +1,25 @@
 # Seesam API systemd setup
 
-Use systemd to run the Seesam API as a background service on the host.
+Seesam API runs on this host as the system-level systemd service `seesam-api.service`.
+The installed unit is `/etc/systemd/system/seesam-api.service`, and the repository copy is `docs/seesam-api.service`.
+
+The service starts uvicorn with:
+
+```sh
+/home/marko/Seesam/.venv/bin/python -m uvicorn core.api:app --host 0.0.0.0 --port 8000
+```
+
+Because the unit uses `Restart=always`, killing the uvicorn process directly makes systemd start it again after `RestartSec=5`. Stop, start, and restart it with `systemctl` instead.
 
 ## Service file
 
-Create `docs/seesam-api.service` with this content:
+`docs/seesam-api.service` contains the canonical unit:
 
 ```ini
 [Unit]
 Description=Seesam API
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -18,22 +28,25 @@ WorkingDirectory=/home/marko/Seesam
 EnvironmentFile=/home/marko/Seesam/.env
 ExecStart=/home/marko/Seesam/.venv/bin/python -m uvicorn core.api:app --host 0.0.0.0 --port 8000
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-## Install and start
+## Install or update the service
 
-Copy the service file into systemd, reload systemd, enable the service on boot, and start it:
+Copy the repository unit into systemd, reload systemd, enable boot startup, and start the service:
 
 ```bash
-sudo cp docs/seesam-api.service /etc/systemd/system/
+sudo cp docs/seesam-api.service /etc/systemd/system/seesam-api.service
 sudo systemctl daemon-reload
 sudo systemctl enable seesam-api
 sudo systemctl start seesam-api
-sudo systemctl status seesam-api
+systemctl status seesam-api --no-pager
 ```
+
+After changing `docs/seesam-api.service`, run the copy and `daemon-reload` commands again before restarting.
 
 ## Manage the service
 
@@ -41,6 +54,12 @@ Stop the API:
 
 ```bash
 sudo systemctl stop seesam-api
+```
+
+Start the API:
+
+```bash
+sudo systemctl start seesam-api
 ```
 
 Restart the API after code or configuration changes:
@@ -52,17 +71,17 @@ sudo systemctl restart seesam-api
 Check the current status:
 
 ```bash
-sudo systemctl status seesam-api
+systemctl status seesam-api --no-pager
 ```
 
 Follow live logs:
 
 ```bash
-sudo journalctl -u seesam-api -f
+journalctl -u seesam-api -f
 ```
 
 Show recent logs:
 
 ```bash
-sudo journalctl -u seesam-api -n 100
+journalctl -u seesam-api -n 100 --no-pager
 ```

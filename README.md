@@ -96,12 +96,61 @@ Lopeta komennolla `exit`, `quit`, `lopeta` tai näppäinyhdistelmällä Ctrl-D.
 Seesam sisältää myös FastAPI-pohjaisen HTTP-rajapinnan. Asenna ensin
 riippuvuudet virtuaaliympäristöön kohdan "Python-virtuaaliympäristö" mukaisesti.
 
-Käynnistä API paikallisesti aktivoidussa virtuaaliympäristössä:
+Käynnistä API paikallisesti foreground-ajoon aktivoidussa virtuaaliympäristössä:
 
 ```sh
 source .venv/bin/activate
 python -m uvicorn core.api:app --host 127.0.0.1 --port 8000
 ```
+
+Palvelimella pysyvä API ajetaan systemd-palveluna `seesam-api.service`.
+Palvelu on system-tason yksikkö tiedostossa `/etc/systemd/system/seesam-api.service`
+ja käyttää komentoa:
+
+```sh
+/home/marko/Seesam/.venv/bin/python -m uvicorn core.api:app --host 0.0.0.0 --port 8000
+```
+
+Palvelussa on `Restart=always`, joten pelkkä uvicorn-prosessin tappaminen
+käynnistää sen uudelleen. Hallitse API:a aina systemctl-komentojen kautta.
+
+Pysäytä API:
+
+```sh
+sudo systemctl stop seesam-api
+```
+
+Käynnistä API:
+
+```sh
+sudo systemctl start seesam-api
+```
+
+Käynnistä API uudelleen koodi- tai asetustiedostomuutosten jälkeen:
+
+```sh
+sudo systemctl restart seesam-api
+```
+
+Katso tila:
+
+```sh
+systemctl status seesam-api --no-pager
+```
+
+Seuraa lokeja:
+
+```sh
+journalctl -u seesam-api -f
+```
+
+Näytä viimeisimmät lokit:
+
+```sh
+journalctl -u seesam-api -n 100 --no-pager
+```
+
+Asennus- ja unit-tiedoston malli ovat tiedostossa `docs/systemd.md`.
 
 Tarkista palvelun tila:
 

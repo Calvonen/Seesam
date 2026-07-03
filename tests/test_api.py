@@ -4,6 +4,7 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from core import stt, tts
+from core import energyzen
 from core.brain import Brain
 from core.memory import Memory
 from core.api import create_app
@@ -224,10 +225,34 @@ def test_chat_uses_injected_brain_and_returns_answer(capsys):
     assert response.json() == {"answer": "echo: moro"}
     assert brain.messages == ["moro"]
     output = capsys.readouterr().out
-    assert "[API CHAT RAW] moro" in output
-    assert "[STATUS MATCH] none" in output
-    assert "[LOCAL COMMAND MATCH] none" in output
-    assert "API message sent to AI" in output
+    assert "[API CHAT BODY] {'message': 'moro'}" in output
+    assert "[API CHAT MESSAGE] moro" in output
+    assert "[API CHAT HISTORY] None" in output
+    assert "[API CHAT OTHER FIELDS] {}" in output
+
+
+def test_chat_ignores_extra_fields_when_calling_brain(capsys):
+    brain = FakeBrain()
+    client = TestClient(create_app(brain=brain))
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "moro",
+            "history": [{"role": "user", "content": "aiempi"}],
+            "client": "app",
+            "trace_id": "abc123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "echo: moro"}
+    assert brain.messages == ["moro"]
+    output = capsys.readouterr().out
+    assert "[API CHAT BODY] {'message': 'moro', 'history': [{'role': 'user', 'content': 'aiempi'}], 'client': 'app', 'trace_id': 'abc123'}" in output
+    assert "[API CHAT MESSAGE] moro" in output
+    assert "[API CHAT HISTORY] [{'role': 'user', 'content': 'aiempi'}]" in output
+    assert "[API CHAT OTHER FIELDS] {'client': 'app', 'trace_id': 'abc123'}" in output
 
 
 def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
@@ -251,10 +276,10 @@ def test_chat_handles_memory_command_locally_from_memory_file(tmp_path, capsys):
     assert response.json() == {"answer": "- Marko pitää kahvista"}
     assert ollama.calls == []
     output = capsys.readouterr().out
-    assert "[API CHAT RAW] mitä muistat" in output
-    assert "[STATUS MATCH] none" in output
-    assert "[LOCAL COMMAND MATCH] memory_list" in output
-    assert "API memory command handled locally: mitä muistat" in output
+    assert "[API CHAT BODY] {'message': 'mitä muistat'}" in output
+    assert "[API CHAT MESSAGE] mitä muistat" in output
+    assert "[API CHAT HISTORY] None" in output
+    assert "[API CHAT OTHER FIELDS] {}" in output
 
 
 def test_chat_handles_system_status_command_locally(capsys):
@@ -296,11 +321,116 @@ def test_chat_handles_system_status_command_locally(capsys):
     assert response.json() == {"answer": "Ollama on käynnissä."}
     assert ollama.calls == []
     output = capsys.readouterr().out
-    assert "[API CHAT RAW] onko ollama käynnissä" in output
-    assert "[STATUS MATCH] ollama" in output
-    assert "[LOCAL COMMAND MATCH] system_status" in output
-    assert "API system status command handled locally: onko ollama käynnissä" in output
+    assert "[API CHAT BODY] {'message': 'onko ollama käynnissä'}" in output
+    assert "[API CHAT MESSAGE] onko ollama käynnissä" in output
+    assert "[API CHAT HISTORY] None" in output
+    assert "[API CHAT OTHER FIELDS] {}" in output
 
+
+def test_chat_handles_energyzen_command_locally(monkeypatch, capsys):
+    class FakeOllamaClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, prompt, system_prompt):
+            self.calls.append((prompt, system_prompt))
+            return "AI vastaus"
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    ollama = FakeOllamaClient()
+    brain = Brain(client=ollama, personality="persoonallisuus")
+    client = TestClient(create_app(brain=brain))
+
+    response = client.post("/chat", json={"message": "Mikä on varaajan lämpötila?"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+    }
+    assert ollama.calls == []
+    output = capsys.readouterr().out
+    assert "[API CHAT BODY] {'message': 'Mikä on varaajan lämpötila?'}" in output
+    assert "[API CHAT MESSAGE] Mikä on varaajan lämpötila?" in output
+    assert "[API CHAT HISTORY] None" in output
+    assert "[API CHAT OTHER FIELDS] {}" in output
+
+
+def test_chat_routes_energyzen_locally_after_wrong_ai_context(monkeypatch, capsys):
+    class FakeOllamaClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, prompt, system_prompt):
+            self.calls.append((prompt, system_prompt))
+            return "Mitä haluat sanoa varaajan?"
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    ollama = FakeOllamaClient()
+    brain = Brain(client=ollama, personality="persoonallisuus")
+    client = TestClient(create_app(brain=brain))
+
+    first_response = client.post("/chat", json={"message": "Mitä haluat sanoa varaajan?"})
+    second_response = client.post("/chat", json={"message": "Mikä on varaajan lämpötila?"})
+
+    assert first_response.status_code == 200
+    assert first_response.json() == {"answer": "Mitä haluat sanoa varaajan?"}
+    assert second_response.status_code == 200
+    assert second_response.json() == {
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+    }
+    assert len(ollama.calls) == 1
+    assert brain.conversation_history == [
+        ("Käyttäjä", "Mitä haluat sanoa varaajan?"),
+        ("Seesam", "Mitä haluat sanoa varaajan?"),
+    ]
+    output = capsys.readouterr().out
+    assert "[LOCAL ROUTE] none" in output
+    assert "[LOCAL ROUTE] energyzen" in output
+
+
+def test_chat_uses_environment_brain_for_energyzen_command(monkeypatch):
+    class FakeOllamaClient:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, prompt, system_prompt):
+            self.calls.append((prompt, system_prompt))
+            return "AI vastaus"
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    ollama = FakeOllamaClient()
+    brain = Brain(client=ollama, personality="persoonallisuus")
+    created_brains = []
+
+    def fake_from_environment(cls):
+        created_brains.append(cls)
+        return brain
+
+    monkeypatch.setattr(Brain, "from_environment", classmethod(fake_from_environment))
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post("/chat", json={"message": "Mikä on varaajan lämpötila?"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+    }
+    assert created_brains == [Brain]
+    assert app.state.brain is brain
+    assert ollama.calls == []
 
 def test_chat_requires_message_field():
     client = TestClient(create_app(brain=FakeBrain()))

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core import energyzen, shelly
 from core.commands import handle_local_command
 from core.config import PROJECT_ROOT, load_env_file
 from core.memory import AssistantIdentityMemory, EpisodeLog, Memory, UserProfileMemory
@@ -19,6 +20,7 @@ ASSISTANT_IDENTITY_PATH = MEMORY_DIR / "seesam.local.yaml"
 USER_PROFILE_PATH = MEMORY_DIR / "marko.local.yaml"
 MEMORY_PATH = MEMORY_DIR / "memories.local.txt"
 EPISODE_LOG_PATH = MEMORY_DIR / "episodes.local.log"
+DEVICES_PATH = MEMORY_DIR / "devices.local.yaml"
 LEGACY_MARKO_MEMORY_PATH = MEMORY_DIR / "marko.local.txt"
 LEGACY_MEMORY_DIR = MEMORY_DIR / "legacy"
 MEMORY_COMMAND_PATTERN = re.compile(r"^\s*muista\s+(?:tämä|tama|tamä)\s*:\s*(.*)$", re.IGNORECASE)
@@ -46,11 +48,87 @@ EMPTY_MEMORY_RESPONSE = "En saanut tallennettavaa muistettavaa."
 EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
 EMPTY_MEMORY_DELETE_RESPONSE = "En löytänyt poistettavaa muistoa."
 MEMORY_NUMBER_NOT_FOUND_RESPONSE = "En löytänyt muistia tuolla numerolla. Näytä viimeisimmät muistot ja valitse numero listalta."
+SHELLY_CONNECTION_ERROR_RESPONSE = "En saanut yhteyttä Shelly-laitteeseen."
+ENERGYZEN_CONNECTION_ERROR_RESPONSE = "En saanut haettua varaajan tietoja."
+GRILLIKATOS_LIGHTS_ON_RESPONSE = "Grillikatoksen valot sytytetty."
+GRILLIKATOS_LIGHTS_OFF_RESPONSE = "Grillikatoksen valot sammutettu."
+ENERGYZEN_TANK_WORDS = (
+    "varaaja",
+    "varraaja",
+    "varaaj",
+    "raaja",
+    "lamminvesi",
+    "lammin vesi",
+    "lamminta vetta",
+    "varaja",
+    "varaj",
+
+)
+ENERGYZEN_TANK_PHRASE_PATTERNS = (
+    re.compile(r"\bvaraa?\s+jossa\b"),
+)
+ENERGYZEN_HEAT_WORDS = ("lampo", "lamminta", "suihku","lämmin",)
+ENERGYZEN_SHOWER_PHRASES = ("lammita suihku", "suihkuja")
 
 
 def load_personality(path: Path = PERSONALITY_PATH) -> str:
     """Load Seesam's Finnish personality prompt."""
     return path.read_text(encoding="utf-8").strip()
+
+
+def _normalize_command_text(text: str) -> str:
+    """Normalize Finnish voice command text for conservative local matching."""
+    lowered = text.lower().strip()
+    lowered = lowered.translate(str.maketrans({"ä": "a", "ö": "o", "å": "a"}))
+    lowered = re.sub(r"[?.!,]+", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered)
+    return lowered
+
+
+def _shelly_device_aliases(device: shelly.ShellyDevice) -> tuple[str, ...]:
+    aliases = [device.name, *device.aliases]
+    normalized_aliases = []
+    seen = set()
+    for alias in aliases:
+        normalized = _normalize_command_text(alias)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            normalized_aliases.append(normalized)
+    return tuple(normalized_aliases)
+
+
+def _shelly_alias_command_kind(command: str, alias: str) -> str | None:
+    status_alias = alias.removesuffix(" valot") + " valojen" if alias.endswith(" valot") else alias
+
+    on_phrases = {
+        f"sytyta {alias}",
+        f"laita {alias} paalle",
+        f"{alias} valot paalle",
+        f"{alias} paalle",
+        f"paalle {alias}",
+    }
+    if command in on_phrases:
+        return "on"
+
+    off_phrases = {
+        f"sammuta {alias}",
+        f"laita {alias} pois",
+        f"{alias} valot pois",
+        f"{alias} pois paalta",
+        f"{alias} pois",
+    }
+    if command in off_phrases:
+        return "off"
+
+    status_phrases = {
+        f"mika on {alias} tila",
+        f"mika on {status_alias} tila",
+        f"ovatko {alias} paalla",
+    }
+    if command in status_phrases:
+        return "status"
+
+    return None
 
 
 def build_client() -> OllamaClient:
@@ -146,6 +224,7 @@ class Brain:
     user_profile: UserProfileMemory | None = None
     episode_log: EpisodeLog | None = None
     system_status: SystemStatus | None = None
+    devices_path: Path = DEVICES_PATH
     conversation_history: list[tuple[str, str]] = field(default_factory=list)
     history_limit: int = CONVERSATION_HISTORY_LIMIT
 
@@ -179,6 +258,14 @@ class Brain:
         system_status_response = self._handle_system_status_command(user_input)
         if system_status_response is not None:
             return system_status_response
+
+        energyzen_response = self._handle_energyzen_command(user_input)
+        if energyzen_response is not None:
+            return energyzen_response
+
+        shelly_response = self._handle_shelly_command(user_input)
+        if shelly_response is not None:
+            return shelly_response
 
         assistant_identity_response = self._handle_assistant_identity_question(user_input)
         if assistant_identity_response is not None:
@@ -233,6 +320,10 @@ class Brain:
                     return "system_status"
             elif self.system_status.answer(user_input) is not None:
                 return "system_status"
+        if self._shelly_command_kind(user_input) is not None:
+            return "shelly"
+        if self._matches_energyzen_command(user_input):
+            return "energyzen"
         if self._matches_assistant_identity_question(user_input):
             return "assistant_identity"
         if MEMORY_COMMAND_PATTERN.match(user_input) is not None:
@@ -252,6 +343,29 @@ class Brain:
         if handle_local_command(user_input) is not None:
             return "local_command"
         return None
+
+    def local_route_name(self, user_input: str) -> str:
+        """Return API debug route for local tools using only the latest input."""
+        command_name = self.local_command_name(user_input)
+
+        if command_name == "energyzen":
+            return "energyzen"
+        if command_name == "shelly":
+            return "shelly"
+        if command_name == "system_status":
+            return "system"
+        if command_name in {
+            "memory_save",
+            "deep_memory_save",
+            "memory_latest",
+            "memory_latest_list",
+            "memory_delete_latest",
+            "memory_delete_number",
+            "memory_list",
+        }:
+            return "memory"
+
+        return "none"
 
     def is_system_status_command(self, user_input: str) -> bool:
         """Return whether the input is a local system-status command."""
@@ -273,6 +387,71 @@ class Brain:
             return None
 
         return self.system_status.answer(user_input)
+
+    def _handle_energyzen_command(self, user_input: str) -> str | None:
+        """Return EnergyZen tank readings without calling Ollama."""
+        if not self._matches_energyzen_command(user_input):
+            return None
+
+        try:
+            return energyzen.format_reading(energyzen.get_latest_reading())
+        except energyzen.EnergyZenError:
+            return ENERGYZEN_CONNECTION_ERROR_RESPONSE
+
+    def _matches_energyzen_command(self, user_input: str) -> bool:
+        normalized = _normalize_command_text(user_input)
+        if "energyzen" in normalized or "lamminvesivaraaja" in normalized:
+            return True
+
+        has_tank_word = any(word in normalized for word in ENERGYZEN_TANK_WORDS) or any(
+            pattern.search(normalized) is not None for pattern in ENERGYZEN_TANK_PHRASE_PATTERNS
+        )
+        has_heat_word = any(word in normalized for word in ENERGYZEN_HEAT_WORDS)
+        has_shower_phrase = any(phrase in normalized for phrase in ENERGYZEN_SHOWER_PHRASES)
+
+        return (has_tank_word and has_heat_word) or has_shower_phrase
+
+    def _handle_shelly_command(self, user_input: str) -> str | None:
+        """Handle configured Shelly device commands without calling Ollama."""
+        command = self._match_shelly_command(user_input)
+        if command is None:
+            return None
+
+        command_kind, device = command
+
+        try:
+            if command_kind == "on":
+                shelly.switch_on(device.ip, device.channel)
+                return GRILLIKATOS_LIGHTS_ON_RESPONSE
+            if command_kind == "off":
+                shelly.switch_off(device.ip, device.channel)
+                return GRILLIKATOS_LIGHTS_OFF_RESPONSE
+
+            status = shelly.get_status(device.ip, device.channel)
+        except shelly.ShellyError:
+            return SHELLY_CONNECTION_ERROR_RESPONSE
+
+        if not isinstance(status.get("output"), bool):
+            return SHELLY_CONNECTION_ERROR_RESPONSE
+
+        state = "päällä" if status["output"] else "pois päältä"
+        return f"Grillikatoksen valot ovat {state}."
+
+    def _shelly_command_kind(self, user_input: str) -> str | None:
+        """Return Shelly command kind for configured device aliases."""
+        command = self._match_shelly_command(user_input)
+        if command is None:
+            return None
+        return command[0]
+
+    def _match_shelly_command(self, user_input: str) -> tuple[str, shelly.ShellyDevice] | None:
+        normalized = _normalize_command_text(user_input)
+        for device in shelly.load_devices(self.devices_path).values():
+            for alias in _shelly_device_aliases(device):
+                match = _shelly_alias_command_kind(normalized, alias)
+                if match is not None:
+                    return match, device
+        return None
 
     def respond_with_ai(self, user_input: str) -> str:
         """Return an AI response and update short conversation history."""

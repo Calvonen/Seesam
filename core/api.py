@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
 from core.brain import Brain
@@ -70,28 +70,36 @@ def create_app(
         return app.state.specs_collector()
 
     @app.post("/chat", response_model=ChatResponse)
-    def chat(request: ChatRequest) -> ChatResponse:
+    async def chat(request: Request) -> ChatResponse:
         """Return Seesam's answer for one chat message."""
+        request_body = await request.json()
+        if not isinstance(request_body, dict) or not isinstance(request_body.get("message"), str):
+            raise HTTPException(
+                status_code=422,
+                detail="Field 'message' is required and must be a string.",
+            )
+
+        chat_request = ChatRequest(**request_body)
+        other_fields = {
+            key: value
+            for key, value in request_body.items()
+            if key not in {"message", "history"}
+        }
         brain = get_brain()
-        print(f"[API CHAT RAW] {request.message}")
-        status_match = "none"
-        if hasattr(brain, "system_status_match_name"):
-            status_match = brain.system_status_match_name(request.message)
-        print(f"[STATUS MATCH] {status_match}")
-        command_name = "none"
-        if hasattr(brain, "local_command_name"):
-            command_name = brain.local_command_name(request.message) or "none"
-        print(f"[LOCAL COMMAND MATCH] {command_name}")
-        local_answer = brain.handle_local_command(request.message)
+        print(f"[API CHAT BODY] {request_body}")
+        print(f"[API CHAT MESSAGE] {chat_request.message}")
+        print(f"[API CHAT HISTORY] {request_body.get('history')}")
+        print(f"[API CHAT OTHER FIELDS] {other_fields}")
+        local_route = "none"
+        if hasattr(brain, "local_route_name"):
+            local_route = brain.local_route_name(chat_request.message)
+        print(f"[LOCAL ROUTE] {local_route}")
+
+        local_answer = brain.handle_local_command(chat_request.message)
         if local_answer is not None:
-            if brain.is_memory_command(request.message):
-                print(f"API memory command handled locally: {request.message}")
-            elif brain.is_system_status_command(request.message):
-                print(f"API system status command handled locally: {request.message}")
             return ChatResponse(answer=local_answer)
 
-        print("API message sent to AI")
-        answer = brain.respond_with_ai(request.message)
+        answer = brain.respond_with_ai(chat_request.message)
         return ChatResponse(answer=answer)
 
     @app.post("/speak")

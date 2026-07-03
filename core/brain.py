@@ -271,6 +271,10 @@ class Brain:
         if assistant_identity_response is not None:
             return assistant_identity_response
 
+        local_response = handle_local_command(user_input)
+        if local_response is not None:
+            return local_response
+
         memory_response = self._handle_memory_command(user_input)
         if memory_response is not None:
             return memory_response
@@ -295,7 +299,7 @@ class Brain:
         if memory_list_response is not None:
             return memory_list_response
 
-        return handle_local_command(user_input)
+        return None
 
     def is_memory_command(self, user_input: str) -> bool:
         """Return whether the input is a memory-management command."""

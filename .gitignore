@@ -10,3 +10,5 @@ memory/*.local.json
 memory/*.local.yaml
 memory/*.local.log
 memory/legacy/
+data/spotify_token.local.json
+spotify/spotify_config.local.json

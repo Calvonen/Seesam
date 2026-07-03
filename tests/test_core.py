@@ -65,6 +65,463 @@ def test_system_status_commands_are_handled_without_ollama():
     assert client.calls == []
 
 
+def test_audio_devices_config_separates_voice_and_media_outputs():
+    from audio import audio_manager
+
+    config = audio_manager.load_audio_devices()
+
+    assert config["voice_output"] == {"mode": "api"}
+    assert config["media_output"] == {"default": "steljes_ns3"}
+    assert config["devices"]["steljes_ns3"]["name"] == "Steljes audio NS3"
+    assert config["devices"]["steljes_ns3"]["volume"] == 0.8
+
+
+def test_ensure_default_media_output_uses_media_output_default(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "voice_output": {"mode": "api"},
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        return audio_manager.AudioResult(True, "Connected: yes")
+
+    monkeypatch.setattr(audio_manager, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_default_media_output()
+
+    assert result.success is True
+    assert result.device_id == "steljes_ns3"
+    assert ["wpctl", "set-default", "39"] in calls
+
+
+def test_audio_manager_connects_bluetooth_output_and_selects_sink(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "voice_output": {"mode": "api"},
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(True, "Connected: no")
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n  * 39. Steljes audio NS3 [vol: 0.50]")
+        return audio_manager.AudioResult(True, "ok")
+
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is True
+    assert result.message == "Steljes-kaiuttimet yhdistetty."
+    assert result.device_id == "steljes_ns3"
+    assert result.sink_id == "39"
+    assert calls == [
+        ["bluetoothctl", "power", "on"],
+        ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"],
+        ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"],
+        ["wpctl", "status"],
+        ["wpctl", "set-default", "39"],
+        ["wpctl", "set-volume", "39", "0.40"],
+    ]
+
+
+def test_audio_manager_skips_connect_when_bluetooth_is_already_connected(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "voice_output": {"mode": "api"},
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(True, "Connected: yes")
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        return audio_manager.AudioResult(True, "ok")
+
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output("steljes_ns3", path=config_path)
+
+    assert result.success is True
+    assert ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"] not in calls
+
+
+def test_audio_manager_returns_clear_message_when_connect_times_out(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(True, "Connected: no")
+        if command == ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(False, "Failed to connect: org.bluez.Error.Failed br-connection-page-timeout")
+        return audio_manager.AudioResult(True, "ok")
+
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is False
+    assert result.message == audio_manager.SPEAKERS_SLEEPING_MESSAGE
+    assert ["bluetoothctl", "remove", "04:FE:A1:46:BA:AA"] not in calls
+
+
+def test_audio_manager_returns_clear_message_when_device_is_not_available(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(True, "Connected: no")
+        if command == ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"]:
+            return audio_manager.AudioResult(False, "Device 04:FE:A1:46:BA:AA not available")
+        return audio_manager.AudioResult(True, "ok")
+
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is False
+    assert result.message == audio_manager.SPEAKERS_SLEEPING_MESSAGE
+    assert not any(command[:2] == ["bluetoothctl", "remove"] for command in calls)
+
+
+def test_audio_manager_finds_sink_id_only_from_sinks_section():
+    from audio import audio_manager
+
+    wpctl_status = """
+Audio
+  Sources:
+    12. Steljes audio NS3 monitor
+  Sinks:
+    39. Steljes audio NS3 [vol: 0.40]
+  Sources:
+    41. Built-in Audio
+"""
+
+    assert audio_manager._find_sink_id(wpctl_status, "Steljes audio NS3") == "39"
+
+
+def test_audio_manager_parses_wireplumber_tree_sink_lines():
+    from audio import audio_manager
+
+    wpctl_status = """
+Audio
+ ├─ Devices:
+ │      43. Steljes audio NS3                   [bluez5]
+ ├─ Sinks:
+ │  *   44. Steljes audio NS3                   [vol: 0.35]
+"""
+
+    assert audio_manager._sink_lines(wpctl_status) == [" │  *   44. Steljes audio NS3                   [vol: 0.35]"]
+    assert audio_manager._find_sink_id(wpctl_status, "Steljes audio NS3") == "44"
+
+
+def test_audio_manager_fails_when_setting_default_or_volume_fails(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "voice_output": {"mode": "api"},
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def default_fails(command):
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "set-default", "39"]:
+            return audio_manager.AudioResult(False, "set-default failed")
+        return audio_manager.AudioResult(True, "Connected: yes")
+
+    monkeypatch.setattr(audio_manager, "_run", default_fails)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is False
+    assert "Oletusulostulon asetus epäonnistui" in result.message
+
+    def volume_fails(command):
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "set-volume", "39", "0.40"]:
+            return audio_manager.AudioResult(False, "set-volume failed")
+        return audio_manager.AudioResult(True, "Connected: yes")
+
+    monkeypatch.setattr(audio_manager, "_run", volume_fails)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is False
+    assert "Äänenvoimakkuuden asetus epäonnistui" in result.message
+
+
+def test_audio_manager_returns_clear_error_when_sink_is_missing(monkeypatch, tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "voice_output": {"mode": "api"},
+  "media_output": {"default": "steljes_ns3"},
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fake_run(command):
+        if command == ["wpctl", "status"]:
+            return audio_manager.AudioResult(True, "Sinks:\n  41. Built-in Audio")
+        return audio_manager.AudioResult(True, "Connected: yes")
+
+    monkeypatch.setattr(audio_manager, "_run", fake_run)
+    monkeypatch.setattr(audio_manager.time, "sleep", lambda seconds: None)
+
+    result = audio_manager.ensure_media_output(path=config_path)
+
+    assert result.success is False
+    assert result.message == audio_manager.SINK_NOT_ACTIVATED_MESSAGE
+
+
+def test_audio_device_alias_matching_uses_config(tmp_path):
+    from audio import audio_manager
+
+    config_path = tmp_path / "audio_devices.json"
+    config_path.write_text(
+        """
+{
+  "devices": {
+    "steljes_ns3": {
+      "name": "Steljes audio NS3",
+      "type": "bluetooth",
+      "mac": "04:FE:A1:46:BA:AA",
+      "volume": 0.40,
+      "aliases": ["steljes", "kaiuttimet", "olohuone"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert audio_manager.find_device_id_for_text("yhdistä olohuone", path=config_path) == "steljes_ns3"
+
+
+def test_audio_output_local_commands_call_audio_manager(monkeypatch):
+    from audio import audio_manager
+    from core import commands
+
+    calls = []
+
+    def fake_ensure_media_output(device_id=None):
+        calls.append(device_id)
+        return audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty.")
+
+    monkeypatch.setattr(commands, "ensure_media_output", fake_ensure_media_output)
+    monkeypatch.setattr(
+        commands,
+        "find_device_id_for_text",
+        lambda text: "steljes_ns3" if any(alias in text for alias in {"kaiuttimet", "steljes", "olohuone"}) else None,
+    )
+
+    assert handle_local_command("yhdistä kaiuttimet") == "Steljes-kaiuttimet yhdistetty."
+    assert handle_local_command("steljes päälle") == "Steljes-kaiuttimet yhdistetty."
+    assert handle_local_command("media päälle") == "Steljes-kaiuttimet yhdistetty."
+    assert handle_local_command("olohuone päälle") == "Steljes-kaiuttimet yhdistetty."
+    assert calls == ["steljes_ns3", "steljes_ns3", "steljes_ns3", "steljes_ns3"]
+
+
+def test_audio_output_local_command_returns_audio_manager_failure_message(monkeypatch):
+    from audio import audio_manager
+    from core import commands
+
+    monkeypatch.setattr(
+        commands,
+        "ensure_media_output",
+        lambda device_id=None: audio_manager.AudioResult(False, "wpctl failed"),
+    )
+
+    assert handle_local_command("kaiuttimet päälle") == "wpctl failed"
+
+
+def test_music_commands_are_routed_to_spotify(monkeypatch):
+    from core import commands
+
+    calls = []
+
+    def fake_spotify_command(text):
+        calls.append(text)
+        return "Soitan Spotifystä." if text.casefold() in {"soita spotify", "soita musiikkia"} else None
+
+    monkeypatch.setattr(commands, "handle_spotify_command", fake_spotify_command)
+
+    assert handle_local_command("soita Spotify") == "Soitan Spotifystä."
+    assert handle_local_command("soita musiikkia") == "Soitan Spotifystä."
+    assert calls == ["soita Spotify", "soita musiikkia"]
+
+
+def test_spotify_intents_are_handled_before_ollama_fallback(monkeypatch):
+    from core import commands
+
+    monkeypatch.setattr(commands, "handle_spotify_command", lambda text: "Soitan Spotifystä." if text in {"laita spotify päälle", "toista spotify", "toista"} else None)
+
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("laita spotify päälle") == "Soitan Spotifystä."
+    assert brain.respond("toista spotify") == "Soitan Spotifystä."
+    assert brain.respond("toista") == "Soitan Spotifystä."
+    assert client.calls == []
+
+
+def test_track_identification_intents_are_handled_before_memory_or_fallback(monkeypatch):
+    from core import commands
+
+    monkeypatch.setattr(
+        commands,
+        "handle_spotify_command",
+        lambda text: "Nyt soi ReinaRi – Spiritual Chemistry."
+        if text in {"mikä kappale tämä on", "mikä kappale", "mikä biisi", "kuka soi"}
+        else None,
+    )
+
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("mikä kappale tämä on") == "Nyt soi ReinaRi – Spiritual Chemistry."
+    assert brain.respond("mikä kappale") == "Nyt soi ReinaRi – Spiritual Chemistry."
+    assert brain.respond("mikä biisi") == "Nyt soi ReinaRi – Spiritual Chemistry."
+    assert brain.respond("kuka soi") == "Nyt soi ReinaRi – Spiritual Chemistry."
+    assert client.calls == []
+
+
 def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(65) == "1 min"
     assert format_duration(3660) == "1 h 1 min"

@@ -128,9 +128,8 @@ ja näyttää tarvittaessa nykyisen `wpctl status` -tulosteen.
 Audio managerin laiteasetukset ovat tiedostossa `audio/audio_devices.json`.
 `voice_output.mode` on `api`, joten Seesamin keskusteluääni pysyy nykyisessä
 API-/TTS-polussa. `media_output.default` on `steljes_ns3`, ja Steljes NS3 on vain
-mediaäänelle. Tulevat soittokomennot voivat kutsua `ensure_media_output()` tai
-`ensure_default_media_output()` ennen mediaäänen toistoa. Spotify API
--integraatiota ei ole vielä lisätty.
+mediaäänelle. Spotify-komennot kutsuvat `ensure_default_media_output()` ennen
+mediaäänen toistoa.
 
 Seesamin paikalliset komennot kaiuttimen yhdistämiseen ovat:
 
@@ -139,6 +138,105 @@ kaiuttimet päälle
 yhdistä kaiuttimet
 steljes päälle
 media päälle
+```
+
+
+## Spotify
+
+Spotify on Seesamissa mediaulostulo: se ei muuta `voice_output`- tai
+API-/TTS-vastausten reittiä. Ennen Spotify-toiston käynnistystä Seesam varmistaa
+`audio_manager.ensure_default_media_output()`-kutsulla, että Steljes NS3 on
+valmis mediaulostuloksi. Jos kaiuttimet eivät vastaa, Spotify-komento palauttaa
+virheen eikä jatka toistopyyntöön.
+
+Toimiva Spotify Connect -soitin ajetaan marko-käyttäjän systemd user service
+-palveluna, jotta se näkee saman PipeWire/WirePlumber-ympäristön ja Steljes-
+ulostulon kuin työpöytäistunto. System-tason Raspotify ei ole tähän oikea
+ratkaisu.
+
+Palvelun soitinkomento on:
+
+```sh
+/usr/bin/librespot --name Seesam --bitrate 160 --device-type speaker --enable-oauth --oauth-port 8889 --initial-volume 90
+```
+
+Jos käytössä oleva `/usr/bin/librespot` tukee sitä, äänenvoimakkuuden vasteen voi
+kokeilla tehdä lineaariseksi lisäämällä option:
+
+```sh
+--volume-ctrl linear
+```
+
+Käytössä oleva user service on:
+
+```sh
+~/.config/systemd/user/librespot-seesam.service
+```
+
+Luo ensin Spotify Developer Dashboardissa uusi app. Lisää appin Redirect URI
+-listaan täsmälleen:
+
+```sh
+http://127.0.0.1:8888/callback
+```
+
+Kopioi esimerkkikonfigi paikalliseksi tiedostoksi ja aseta siihen appin
+`client_id`. Älä lisää client_id:tä `.env`-tiedostoon automaattisesti, äläkä
+commitoi paikallista konfigia.
+
+```sh
+cp spotify/spotify_config.example.json spotify/spotify_config.local.json
+```
+
+`spotify/spotify_config.local.json` näyttää esimerkiksi tältä:
+
+```json
+{
+  "client_id": "oma-client-id",
+  "redirect_uri": "http://127.0.0.1:8888/callback",
+  "token_path": "data/spotify_token.local.json"
+}
+```
+
+Kirjaudu Spotifyyn PKCE-virralla:
+
+```sh
+python3 scripts/spotify_login.py
+```
+
+Skripti tulostaa kirjautumisosoitteen, käynnistää localhost-callbackin porttiin
+8888 ja tallentaa tokenit tiedostoon `data/spotify_token.local.json`. Token- ja
+paikallinen konfigitiedosto on jätetty versionhallinnan ulkopuolelle.
+
+Hyödylliset tarkistuskomennot:
+
+```sh
+systemctl --user status librespot-seesam.service --no-pager
+journalctl --user -u librespot-seesam.service -n 60 --no-pager
+PYTHONPATH=. python3 scripts/spotify_status.py
+PYTHONPATH=. python3 scripts/spotify_test_playback.py
+wpctl status | grep -i -A12 -B8 librespot
+```
+
+Turvallinen playback-testi varmistaa ensin mediaulostulon, etsii Spotify Connect
+-laitteen nimellä `Seesam`, tekee transfer playbackin sille ja kokeilee
+play/pause/play-ohjausta.
+
+Spotify-komentoja Seesamin chatissa ovat esimerkiksi:
+
+```sh
+soita spotify
+musiikki päälle
+mitä soi
+mikä biisi soi
+tauko
+jatka
+seuraava
+edellinen
+ääni 80
+volyymi 80
+spotify volume 80
+musiikki ääni 90
 ```
 
 

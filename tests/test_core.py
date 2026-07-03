@@ -139,10 +139,82 @@ def test_natural_system_status_phrases_are_handled_without_ollama(monkeypatch):
     )
 
     assert brain.respond("mitä kello on").startswith("Kello on ")
-    assert "AMD Test" in brain.respond("mikä cpu koneessa")
-    assert "NVIDIA Test GPU" in brain.respond("mikä gpu koneessa")
-    assert "RAM-muistia" in brain.respond("entä ram")
-    assert "RAM-muistia" in brain.respond("ram")
+    assert brain.respond("mikä cpu koneessa") == "Prosessori on AMD Test. Kuorma on 12,5 prosenttia."
+    assert brain.respond("mikä gpu koneessa") == "Näyttis on Test GPU, lämpötila 40 astetta ja kuorma 5 prosenttia."
+    assert brain.respond("entä ram") == "Muistia on 32 gigaa, josta käytössä 12,5 prosenttia."
+    assert brain.respond("ram") == "Muistia on 32 gigaa, josta käytössä 12,5 prosenttia."
+    assert client.calls == []
+
+
+def test_system_status_speech_answers_are_natural_and_details_stay_raw(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 0.8,
+            "cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+            "cpu_cores_physical": 6,
+            "cpu_threads": 12,
+            "ram_used_gb": 4.37,
+            "ram_total_gb": 31.23,
+            "ram_free_gb": 26.86,
+            "ram_percent": 14.0,
+            "disk_used_gb": 69.37,
+            "disk_total_gb": 575.67,
+            "disk_free_gb": 506.3,
+            "disk_percent": 7.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "os_name": "Ubuntu Test",
+            "kernel": "6.8.0-test",
+            "local_ip": "192.168.1.10",
+            "gpu": {
+                "name": "NVIDIA GeForce RTX 2080 Ti",
+                "memory_used_mb": 6983,
+                "memory_total_mb": 11264,
+                "temperature_c": 32,
+                "utilization_percent": 0,
+            },
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(
+        client=client,
+        personality="vastaa suomeksi",
+        system_status=SystemStatus(started_at=0),
+    )
+
+    assert brain.respond("näyttis") == "Näyttis on RTX 2080 Tee ii, lämpötila 32 astetta ja kuorma 0 prosenttia."
+    assert brain.system_status.lastSystemInfoTopic == "gpu"
+    assert brain.respond("tarkemmin") == "GPU: NVIDIA GeForce RTX 2080 Ti. VRAM: 6983 / 11264 MiB. Lämpötila: 32 °C. Kuorma: 0 %."
+
+    assert brain.respond("mikä prosessori") == "Prosessori on Intel i5-11400F. Kuorma on 0,8 prosenttia."
+    assert brain.system_status.lastSystemInfoTopic == "cpu"
+    assert brain.respond("kerro tarkemmin") == "CPU: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz. Ytimet/säikeet: 6 / 12. Kuorma: 0.8 %."
+
+    assert brain.respond("muisti") == "Muistia on 32 gigaa, josta käytössä 14 prosenttia."
+    assert brain.system_status.lastSystemInfoTopic == "ram"
+    assert brain.respond("näytä tarkat tiedot") == "RAM-muistia on vapaana 26.86 GiB / 31.23 GiB (14.0 % käytössä)."
+
+    assert brain.respond("levy tila") == "Levytilaa on 576 gigaa, josta vapaana 506 gigaa."
+
+    details = brain.respond("tarkat tiedot")
+    assert details == "Levytilaa on vapaana 506.3 GiB / 575.67 GiB (7.0 % käytössä)."
+    assert brain.system_status.lastSystemInfoTopic == "disk"
+
+    all_details = brain.respond("kaikki tarkat tiedot")
+    assert "CPU: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz. Ytimet/säikeet: 6 / 12. Kuorma: 0.8 %." in all_details
+    assert "GPU: NVIDIA GeForce RTX 2080 Ti. VRAM: 6983 / 11264 MiB. Lämpötila: 32 °C. Kuorma: 0 %." in all_details
+    assert "RAM-muistia on vapaana 26.86 GiB / 31.23 GiB (14.0 % käytössä)." in all_details
+    assert "Levytilaa on vapaana 506.3 GiB / 575.67 GiB (7.0 % käytössä)." in all_details
+    assert brain.system_status.lastSystemInfoTopic == "all"
+
+    assert (
+        brain.respond("koneen tila")
+        == "Kone on kunnossa. Prosessorin kuorma on 0,8 prosenttia, näyttis käy 32 asteessa, muistia on käytössä 14 prosenttia ja levytilaa on vapaana 506 gigaa."
+    )
+    assert brain.respond("tarkemmin") == all_details
     assert client.calls == []
 
 
@@ -940,6 +1012,30 @@ def test_transcribe_audio_returns_clear_error_when_model_missing(monkeypatch):
         raise AssertionError("Expected STTError")
 
 
+def test_normalize_for_speech_converts_technical_units_and_marks():
+    from core import tts
+
+    assert tts.normalize_for_speech("0.8 %") == "0,8 prosenttia"
+    assert tts.normalize_for_speech("31 °C") == "31 astetta"
+    assert tts.normalize_for_speech("506.3 GiB") == "506,3 gigaa"
+    assert (
+        tts.normalize_for_speech("RAM-muistia on vapaana 27.12 GiB / 31.23 GiB (13.1 % käytössä).")
+        == "RAM-muistia on vapaana 27,12 gigaa 31,23 gigasta. 13,1 prosenttia käytössä."
+    )
+    assert (
+        tts.normalize_for_speech("GPU: NVIDIA GeForce RTX 2080 Ti. VRAM: 150 / 11264 MiB. Lämpötila: 31 °C. Kuorma: 0 %.")
+        == "näyttis: NVIDIA GeForce RTX 2080 Ti. näyttömuisti: 150 megaa 11264 megasta. Lämpötila: 31 astetta. Kuorma: 0 prosenttia."
+    )
+    assert (
+        tts.normalize_for_speech("CPU: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz. IP 1.2.3.4")
+        == "prosessori: 11th Gen Intel Core i5-11400F @ 2,60 gigahertsiä. ii pee 1 piste 2 piste 3 piste 4"
+    )
+    assert (
+        tts.normalize_for_speech("230 V, 10 A, 500 mA, 2 kW, 3 Wh, 4 kWh, 1200 RPM")
+        == "230 volttia, 10 ampeeria, 500 milliampeeria, 2 kilowattia, 3 wattituntia, 4 kilowattituntia, 1200 kierrosta minuutissa"
+    )
+
+
 def test_tts_disabled_does_not_call_subprocess(monkeypatch):
     from core import tts
 
@@ -991,6 +1087,29 @@ def test_tts_enabled_calls_piper_and_aplay_with_mocked_subprocess(monkeypatch, t
     assert calls[1][1]["check"] is True
 
 
+def test_tts_speak_normalizes_text_before_piper(monkeypatch, tmp_path):
+    from core import tts
+
+    calls = []
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    piper_bin = tmp_path / "piper"
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return None
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
+    monkeypatch.setattr(tts.subprocess, "run", fake_run)
+
+    tts.speak("GPU: NVIDIA Test. Kuorma: 0.8 %. Lämpötila: 31 °C.")
+
+    assert calls[0][1]["input"] == "näyttis: NVIDIA Test. Kuorma: 0,8 prosenttia. Lämpötila: 31 astetta."
+
+
 def test_piper_failure_does_not_crash_app(monkeypatch):
     from core import tts
 
@@ -1036,6 +1155,32 @@ def test_synthesize_wav_calls_piper_without_aplay(monkeypatch, tmp_path):
     assert calls[0][1]["input"] == "Hei Marko"
     assert calls[0][1]["text"] is True
     assert calls[0][1]["check"] is True
+
+
+def test_synthesize_wav_normalizes_text_before_piper(monkeypatch, tmp_path):
+    from core import tts
+
+    calls = []
+    monkeypatch.setattr(tts, "load_env_file", lambda: None)
+    model = tmp_path / "voice.onnx"
+    piper_bin = tmp_path / "piper"
+    model.write_text("model", encoding="utf-8")
+    piper_bin.write_text("#!/bin/sh", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        Path(command[-1]).write_bytes(b"RIFF wav bytes")
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_ENGINE", "piper")
+    monkeypatch.setenv("TTS_MODEL", str(model))
+    monkeypatch.setenv("TTS_PIPER_BIN", str(piper_bin))
+    monkeypatch.setattr(tts.subprocess, "run", fake_run)
+
+    audio = tts.synthesize_wav("RAM: 27.12 GiB / 31.23 GiB (13.1 % käytössä).")
+
+    assert audio == b"RIFF wav bytes"
+    assert calls[0][1]["input"] == "ram-muisti: 27,12 gigaa 31,23 gigasta. 13,1 prosenttia käytössä."
 
 
 def test_synthesize_wav_returns_clear_error_when_disabled(monkeypatch):

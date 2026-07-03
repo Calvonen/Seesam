@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,85 @@ class TTSError(Exception):
         self.detail = detail
 
 
+def normalize_for_speech(text: str) -> str:
+    """Return text normalized for Finnish text-to-speech only."""
+    spoken = text.strip()
+    if not spoken:
+        return ""
+
+    spoken = spoken.replace("Intel(R)", "Intel").replace("Core(TM)", "Core")
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*GiB\s*/\s*(\d+(?:\.\d+)?)\s*GiB",
+        r"\1 gigaa \2 gigasta",
+        spoken,
+    )
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*GB\s*/\s*(\d+(?:\.\d+)?)\s*GB",
+        r"\1 gigaa \2 gigasta",
+        spoken,
+    )
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*MiB\s*/\s*(\d+(?:\.\d+)?)\s*MiB",
+        r"\1 megaa \2 megasta",
+        spoken,
+    )
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*MB\s*/\s*(\d+(?:\.\d+)?)\s*MB",
+        r"\1 megaa \2 megasta",
+        spoken,
+    )
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*MiB",
+        r"\1 megaa \2 megasta",
+        spoken,
+    )
+    spoken = re.sub(
+        r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*MB",
+        r"\1 megaa \2 megasta",
+        spoken,
+    )
+    spoken = re.sub(r"\s*\(([^()]*)\)", r". \1", spoken)
+
+    replacements = [
+        (r"\bVRAM\b", "näyttömuisti"),
+        (r"\bRAM\b(?!-muisti)", "ram-muisti"),
+        (r"\bGPU\b", "näyttis"),
+        (r"\bCPU\b", "prosessori"),
+        (r"\bIP\b", "ii pee"),
+        (r"(?<=\d)\s*kWh\b", " kilowattituntia"),
+        (r"(?<=\d)\s*Wh\b", " wattituntia"),
+        (r"(?<=\d)\s*GHz\b", " gigahertsiä"),
+        (r"(?<=\d)\s*MHz\b", " megahertsiä"),
+        (r"(?<=\d)\s*GiB\b", " gigaa"),
+        (r"(?<=\d)\s*GB\b", " gigaa"),
+        (r"(?<=\d)\s*MiB\b", " megaa"),
+        (r"(?<=\d)\s*MB\b", " megaa"),
+        (r"(?<=\d)\s*kW\b", " kilowattia"),
+        (r"(?<=\d)\s*mA\b", " milliampeeria"),
+        (r"(?<=\d)\s*RPM\b", " kierrosta minuutissa"),
+        (r"(?<=\d)\s*W\b", " wattia"),
+        (r"(?<=\d)\s*V\b", " volttia"),
+        (r"(?<=\d)\s*A\b", " ampeeria"),
+        (r"(?<=\d)\s*°C\b", " astetta"),
+        (r"(?<=\d)\s*°", " astetta"),
+        (r"(?<=\d)\s*%", " prosenttia"),
+    ]
+    for pattern, replacement in replacements:
+        spoken = re.sub(pattern, replacement, spoken)
+
+    spoken = re.sub(
+        r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b",
+        r"\1 piste \2 piste \3 piste \4",
+        spoken,
+    )
+    spoken = re.sub(r"(?<=\d)\.(?=\d)", ",", spoken)
+    spoken = re.sub(r"\s*/\s*", " ", spoken)
+    spoken = re.sub(r"\s+", " ", spoken)
+    spoken = re.sub(r"\s+([.,:;!?])", r"\1", spoken)
+    spoken = re.sub(r"\.\s*\.", ".", spoken)
+    return spoken.strip()
+
+
 def is_tts_enabled() -> bool:
     """Return whether text-to-speech should be used for responses."""
     load_env_file()
@@ -35,6 +115,8 @@ def synthesize_wav(text: str) -> bytes:
     text = text.strip()
     if not text:
         raise TTSError(400, "Text must not be empty.")
+
+    text = normalize_for_speech(text)
 
     if not is_tts_enabled():
         raise TTSError(
@@ -108,8 +190,11 @@ def speak(text: str) -> None:
     TTS failures are intentionally swallowed so terminal chat keeps working even
     if Piper, the model file, or audio playback is unavailable.
     """
-    if not is_tts_enabled() or not text.strip():
+    text = text.strip()
+    if not is_tts_enabled() or not text:
         return
+
+    text = normalize_for_speech(text)
 
     engine = os.environ.get("TTS_ENGINE", DEFAULT_TTS_ENGINE).strip().casefold()
     if engine != "piper":

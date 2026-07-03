@@ -30,7 +30,27 @@ RAM_WORDS = {"ram", "muisti", "keskusmuisti"}
 DISK_WORDS = {"levy", "levytila", "levytilaa", "disk"}
 OLLAMA_WORDS = {"ollama"}
 MACHINE_CONTEXT_WORDS = {"kone", "koneessa", "serveri", "serverin", "palvelin", "palvelimen"}
+FOLLOWUP_DETAIL_STATUS_PHRASES = {
+    "kerro tarkemmin",
+    "kerro tarkat tiedot",
+    "tarkat tiedot",
+    "näytä tarkat tiedot",
+    "nayta tarkat tiedot",
+    "tarkemmin",
+}
+ALL_DETAIL_STATUS_PHRASES = {
+    "kaikki tarkat tiedot",
+    "kerro kaikki tarkat tiedot",
+    "koko lista",
+    "tekniset tiedot",
+}
+
 GENERAL_STATUS_PHRASES = {
+    "koneen tila",
+    "koneen tiedot",
+    "tietokoneen tila",
+    "järjestelmän tila",
+    "jarjestelman tila",
     "miten kone voi",
     "mikä on koneen tila",
     "mika on koneen tila",
@@ -318,12 +338,14 @@ def read_cpu_count(logical: bool) -> int:
     return len(cores) if cores else (__import__("os").cpu_count() or 0)
 
 
-@dataclass(frozen=True)
+@dataclass
 class SystemStatus:
     """Collect local server status and render Finnish answers."""
 
     started_at: float
     version: str = VERSION
+    lastSystemInfoTopic: str | None = None
+    lastSystemInfoRawText: str | None = None
 
     @classmethod
     def started_now(cls) -> "SystemStatus":
@@ -392,6 +414,10 @@ class SystemStatus:
             return "time"
         if has_any(words, TIME_WORDS):
             return "time"
+        if normalized in ALL_DETAIL_STATUS_PHRASES:
+            return "all_details"
+        if normalized in FOLLOWUP_DETAIL_STATUS_PHRASES:
+            return "details"
         if has_any(words, OLLAMA_WORDS):
             return "ollama"
         if has_any(words, GPU_WORDS):
@@ -400,7 +426,7 @@ class SystemStatus:
             return "cpu"
         if has_any(words, DISK_WORDS):
             return "disk"
-        if normalized == "entä ram" or normalized == "enta ram" or normalized == "ram":
+        if normalized in {"entä ram", "enta ram", "ram", "muisti", "mikä muisti", "mika muisti"}:
             return "ram"
         if (
             has_any(words, RAM_WORDS)
@@ -421,7 +447,7 @@ class SystemStatus:
     def debug_match_name(self, user_input: str) -> str:
         """Return status debug category for API logging."""
         match_kind = self.match_kind(user_input)
-        if match_kind in {"time", "cpu", "gpu", "ram", "disk", "ollama"}:
+        if match_kind in {"time", "cpu", "gpu", "ram", "disk", "ollama", "details", "all_details"}:
             return match_kind
         return "none"
 
@@ -434,21 +460,39 @@ class SystemStatus:
             if normalized in DATE_PHRASES:
                 return f"Tänään on {now:%d.%m.%Y}."
             return f"Kello on {now:%H:%M:%S}."
+
+        if match_kind == "details":
+            return self.lastSystemInfoRawText or format_detailed_status(self.collect())
+
+        data = self.collect() if match_kind is not None else None
+        if match_kind == "all_details":
+            raw = format_detailed_status(data)
+            self._remember_system_info("all", raw)
+            return raw
         if match_kind == "cpu":
-            return format_cpu(self.collect())
+            self._remember_system_info("cpu", format_cpu(data))
+            return format_cpu_speech(data)
         if match_kind == "gpu":
-            return format_gpu(self.collect())
+            raw = format_gpu(data)
+            self._remember_system_info("gpu", raw)
+            return format_gpu_speech(data)
         if match_kind == "ram":
-            return format_memory(self.collect())
+            self._remember_system_info("ram", format_memory(data))
+            return format_memory_speech(data)
         if match_kind == "disk":
-            return format_disk(self.collect())
+            self._remember_system_info("disk", format_disk(data))
+            return format_disk_speech(data)
         if match_kind == "ollama":
-            return format_ollama(self.collect())
+            return format_ollama(data)
         if match_kind == "status":
-            if normalize_user_text(user_input) in {"näytä koneen tiedot", "nayta koneen tiedot", "näytä serverin speksit", "nayta serverin speksit"}:
-                return format_specs(self.collect())
-            return format_machine_status(self.collect())
+            raw = format_detailed_status(data)
+            self._remember_system_info("all", raw)
+            return format_machine_status_speech(data)
         return None
+
+    def _remember_system_info(self, topic: str, raw_text: str) -> None:
+        self.lastSystemInfoTopic = topic
+        self.lastSystemInfoRawText = raw_text
 
     def is_system_status_command(self, user_input: str) -> bool:
         """Return whether a prompt should be handled locally as system status."""
@@ -469,6 +513,16 @@ def format_machine_status(data: dict[str, Any]) -> str:
         first_name, first_temp = next(iter(temperatures.items()))
         lines.append(f"Lämpötila: {first_name} {first_temp} °C.")
     return "\n".join(lines)
+
+
+def format_machine_status_speech(data: dict[str, Any]) -> str:
+    parts = [f"Prosessorin kuorma on {_format_percent(data['cpu_percent'])} prosenttia"]
+    gpu = data.get("gpu")
+    if isinstance(gpu, dict) and gpu.get("temperature_c") is not None:
+        parts.append(f"näyttis käy {_format_number(gpu['temperature_c'])} asteessa")
+    parts.append(f"muistia on käytössä {_format_percent(data['ram_percent'])} prosenttia")
+    parts.append(f"levytilaa on vapaana {_format_whole_gigabytes(data['disk_free_gb'])} gigaa")
+    return "Kone on kunnossa. " + _join_speech_parts(parts) + "."
 
 
 def format_specs(data: dict[str, Any]) -> str:
@@ -492,6 +546,14 @@ def format_specs(data: dict[str, Any]) -> str:
             gpu_line += f", {gpu.get('temperature_c')} °C"
         lines.append(gpu_line)
     return "\n".join(lines)
+
+
+def format_detailed_status(data: dict[str, Any]) -> str:
+    parts = [format_cpu(data)]
+    if isinstance(data.get("gpu"), dict):
+        parts.append(format_gpu(data))
+    parts.extend([format_memory(data), format_disk(data)])
+    return "\n".join(parts)
 
 
 def format_disk(data: dict[str, Any]) -> str:
@@ -529,6 +591,87 @@ def format_gpu(data: dict[str, Any]) -> str:
     if gpu.get("utilization_percent") is not None:
         parts.append(f"Kuorma: {gpu.get('utilization_percent')} %.")
     return " ".join(parts)
+
+
+def format_disk_speech(data: dict[str, Any]) -> str:
+    return (
+        f"Levytilaa on {_format_whole_gigabytes(data['disk_total_gb'])} gigaa, "
+        f"josta vapaana {_format_whole_gigabytes(data['disk_free_gb'])} gigaa."
+    )
+
+
+def format_memory_speech(data: dict[str, Any]) -> str:
+    return (
+        f"Muistia on {_format_memory_total_gigabytes(data['ram_total_gb'])} gigaa, "
+        f"josta käytössä {_format_percent(data['ram_percent'])} prosenttia."
+    )
+
+
+def format_cpu_speech(data: dict[str, Any]) -> str:
+    return f"Prosessori on {_clean_cpu_name(str(data['cpu_model']))}. Kuorma on {_format_percent(data['cpu_percent'])} prosenttia."
+
+
+def format_gpu_speech(data: dict[str, Any]) -> str:
+    gpu = data.get("gpu")
+    if not isinstance(gpu, dict):
+        return "Näyttiksen tietoja ei ole saatavilla."
+
+    parts = [f"Näyttis on {_clean_gpu_name(str(gpu.get('name', 'unknown')))}"]
+    if gpu.get("temperature_c") is not None:
+        parts.append(f"lämpötila {_format_number(gpu['temperature_c'])} astetta")
+    if gpu.get("utilization_percent") is not None:
+        parts.append(f"kuorma {_format_percent(gpu['utilization_percent'])} prosenttia")
+    return _join_speech_parts(parts) + "."
+
+
+def _clean_cpu_name(name: str) -> str:
+    cleaned = re.sub(r"\b\d+(?:st|nd|rd|th)\s+Gen\s+", "", name)
+    cleaned = cleaned.replace("Intel(R)", "Intel").replace("Core(TM)", "")
+    cleaned = re.sub(r"\s*@\s*[^,]+$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    intel_match = re.search(r"\bIntel\b.*?\b(i[3579]-[0-9A-Za-z]+)\b", cleaned)
+    if intel_match:
+        return f"Intel {intel_match.group(1)}"
+    return cleaned
+
+
+def _clean_gpu_name(name: str) -> str:
+    cleaned = re.sub(r"\bNVIDIA\b", "", name, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bGeForce\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\bTi\b", "Tee ii", cleaned)
+    return cleaned or name
+
+
+def _format_memory_total_gigabytes(value: Any) -> str:
+    numeric = float(value)
+    rounded = int(round(numeric))
+    if 30 <= numeric < 32:
+        rounded = 32
+    return str(rounded)
+
+
+def _format_whole_gigabytes(value: Any) -> str:
+    return str(int(round(float(value))))
+
+
+def _format_percent(value: Any) -> str:
+    return _format_number(value)
+
+
+def _format_number(value: Any) -> str:
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}".replace(".", ",")
+
+
+def _join_speech_parts(parts: list[str]) -> str:
+    if len(parts) <= 1:
+        return parts[0] if parts else ""
+    if len(parts) == 2:
+        return " ja ".join(parts)
+    return ", ".join(parts[:-1]) + " ja " + parts[-1]
 
 
 def format_ollama(data: dict[str, Any]) -> str:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,21 +51,29 @@ EMPTY_MEMORY_LIST_RESPONSE = "Muistissa ei ole vielä mitään."
 EMPTY_MEMORY_DELETE_RESPONSE = "En löytänyt poistettavaa muistoa."
 MEMORY_NUMBER_NOT_FOUND_RESPONSE = "En löytänyt muistia tuolla numerolla. Näytä viimeisimmät muistot ja valitse numero listalta."
 SHELLY_CONNECTION_ERROR_RESPONSE = "En saanut yhteyttä Shelly-laitteeseen."
+SHELLY_NEAR_MATCH_THRESHOLD = 0.80
+SHELLY_AUTO_MATCH_THRESHOLD = 0.93
+SHELLY_AMBIGUITY_MARGIN = 0.02
+SHELLY_CONFIRMATION_TTL_SECONDS = 30.0
+SHELLY_CONFIRMATION_YES = {"kylla", "joo", "juu", "tee niin", "kylla vaan", "ok"}
+SHELLY_CONFIRMATION_NO = {"ei", "ala", "peruuta", "unohda"}
 ENERGYZEN_CONNECTION_ERROR_RESPONSE = "En saanut haettua varaajan tietoja."
 GRILLIKATOS_LIGHTS_ON_RESPONSE = "Grillikatoksen valot sytytetty."
 GRILLIKATOS_LIGHTS_OFF_RESPONSE = "Grillikatoksen valot sammutettu."
 ENERGYZEN_TANK_WORDS = (
     "varaaja",
+    "varaajan",
+    "varaajassa",
     "varraaja",
     "varaaj",
     "raaja",
-    "lamminvesi",
+    "vesivaraaja",
+    "lamminvesivaraaja",
     "lammin vesi",
-    "lamminta vetta",
     "varaja",
     "varaj",
-
 )
+ENERGYZEN_STATUS_WORDS = {"tila", "lampotila", "lampo", "paljonko", "kuinka", "riittaako", "vesi", "vetta"}
 ENERGYZEN_TANK_PHRASE_PATTERNS = (
     re.compile(r"\bvaraa?\s+jossa\b"),
 )
@@ -82,7 +92,27 @@ def _normalize_command_text(text: str) -> str:
     lowered = lowered.translate(str.maketrans({"ä": "a", "ö": "o", "å": "a"}))
     lowered = re.sub(r"[?.!,]+", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered)
-    return lowered
+    return _normalize_voice_command_errors(lowered)
+
+
+def _normalize_voice_command_errors(text: str) -> str:
+    text = text.replace("lamminta vetta", "lammin vesi")
+    words = text.split()
+    if not words:
+        return text
+    if words[0] in {"aita", "vaita", "laitan"}:
+        words[0] = "laita"
+    words = [
+        "valot"
+        if word == "malot"
+        else "valo"
+        if word == "malo"
+        else "lampotila"
+        if word in {"lampotilon", "lempatila", "lapotila"}
+        else word
+        for word in words
+    ]
+    return " ".join(words)
 
 
 def _shelly_device_aliases(device: shelly.ShellyDevice) -> tuple[str, ...]:
@@ -97,38 +127,58 @@ def _shelly_device_aliases(device: shelly.ShellyDevice) -> tuple[str, ...]:
     return tuple(normalized_aliases)
 
 
-def _shelly_alias_command_kind(command: str, alias: str) -> str | None:
+def _shelly_alias_command_phrases(alias: str) -> dict[str, tuple[str, ...]]:
     status_alias = alias.removesuffix(" valot") + " valojen" if alias.endswith(" valot") else alias
-
-    on_phrases = {
-        f"sytyta {alias}",
-        f"laita {alias} paalle",
-        f"{alias} valot paalle",
-        f"{alias} paalle",
-        f"paalle {alias}",
+    return {
+        "on": (
+            f"sytyta {alias}",
+            f"laita {alias} paalle",
+            f"{alias} valot paalle",
+            f"{alias} paalle",
+            f"paalle {alias}",
+        ),
+        "off": (
+            f"sammuta {alias}",
+            f"laita {alias} pois",
+            f"{alias} valot pois",
+            f"{alias} pois paalta",
+            f"{alias} pois",
+        ),
+        "status": (
+            f"mika on {alias} tila",
+            f"mika on {status_alias} tila",
+            f"ovatko {alias} paalla",
+        ),
     }
-    if command in on_phrases:
-        return "on"
 
-    off_phrases = {
-        f"sammuta {alias}",
-        f"laita {alias} pois",
-        f"{alias} valot pois",
-        f"{alias} pois paalta",
-        f"{alias} pois",
-    }
-    if command in off_phrases:
-        return "off"
 
-    status_phrases = {
-        f"mika on {alias} tila",
-        f"mika on {status_alias} tila",
-        f"ovatko {alias} paalla",
-    }
-    if command in status_phrases:
-        return "status"
-
+def _shelly_alias_command_kind(command: str, alias: str) -> str | None:
+    for kind, phrases in _shelly_alias_command_phrases(alias).items():
+        if command in phrases:
+            return kind
     return None
+
+
+def _is_safe_light_device(device: shelly.ShellyDevice) -> bool:
+    if device.type.strip().casefold() == "light":
+        return True
+    words = " ".join(_normalize_command_text(alias) for alias in (device.name, *device.aliases))
+    return any(word in words.split() for word in {"valo", "valot", "lamppu", "lamput"})
+
+
+def _shelly_confirmation_question(command_kind: str, device: shelly.ShellyDevice) -> str:
+    device_name = _normalize_command_text(device.aliases[0] if device.aliases else device.name)
+    if command_kind == "on":
+        return f"Tarkoititko sytyttää {device_name}?"
+    if command_kind == "off":
+        return f"Tarkoititko sammuttaa {device_name}?"
+    return f"Tarkoititko {device_name}?"
+
+@dataclass
+class PendingShellyConfirmation:
+    action: str
+    device: shelly.ShellyDevice
+    created_at: float
 
 
 def build_client() -> OllamaClient:
@@ -227,6 +277,7 @@ class Brain:
     devices_path: Path = DEVICES_PATH
     conversation_history: list[tuple[str, str]] = field(default_factory=list)
     history_limit: int = CONVERSATION_HISTORY_LIMIT
+    pending_shelly_confirmation: PendingShellyConfirmation | None = None
 
     @classmethod
     def from_environment(cls) -> "Brain":
@@ -254,6 +305,10 @@ class Brain:
     def handle_local_command(self, user_input: str) -> str | None:
         """Return a local command response, or None when AI should handle it."""
         self._log_event("user_message", user_input)
+
+        pending_handled, pending_response = self._handle_pending_shelly_confirmation(user_input)
+        if pending_handled:
+            return pending_response
 
         system_status_response = self._handle_system_status_command(user_input)
         if system_status_response is not None:
@@ -385,6 +440,30 @@ class Brain:
             return "system_status"
         return "none"
 
+    def _handle_pending_shelly_confirmation(self, user_input: str) -> tuple[bool, str | None]:
+        pending = self.pending_shelly_confirmation
+        if pending is None:
+            return False, None
+
+        normalized = _normalize_command_text(user_input)
+        age_seconds = time.monotonic() - pending.created_at
+        if age_seconds > SHELLY_CONFIRMATION_TTL_SECONDS:
+            self.pending_shelly_confirmation = None
+            if normalized in SHELLY_CONFIRMATION_YES or normalized in SHELLY_CONFIRMATION_NO:
+                return True, "Varmistus vanheni, en tehnyt muutoksia."
+            return False, None
+
+        if normalized in SHELLY_CONFIRMATION_YES:
+            self.pending_shelly_confirmation = None
+            return True, self._execute_shelly_action(pending.action, pending.device)
+        if normalized in SHELLY_CONFIRMATION_NO:
+            self.pending_shelly_confirmation = None
+            return True, "Selvä, en tehnyt muutoksia."
+
+        self.pending_shelly_confirmation = None
+        return False, None
+
+
     def _handle_system_status_command(self, user_input: str) -> str | None:
         """Return local system status answers without calling Ollama."""
         if self.system_status is None:
@@ -404,25 +483,45 @@ class Brain:
 
     def _matches_energyzen_command(self, user_input: str) -> bool:
         normalized = _normalize_command_text(user_input)
+        words = set(normalized.split())
         if "energyzen" in normalized or "lamminvesivaraaja" in normalized:
             return True
 
-        has_tank_word = any(word in normalized for word in ENERGYZEN_TANK_WORDS) or any(
-            pattern.search(normalized) is not None for pattern in ENERGYZEN_TANK_PHRASE_PATTERNS
+        has_tank_word = (
+            any(word in words for word in ENERGYZEN_TANK_WORDS)
+            or any(word.startswith("varaaja") for word in words)
+            or "lammin vesi" in normalized
+            or any(pattern.search(normalized) is not None for pattern in ENERGYZEN_TANK_PHRASE_PATTERNS)
         )
+        has_status_word = bool(words & ENERGYZEN_STATUS_WORDS)
         has_heat_word = any(word in normalized for word in ENERGYZEN_HEAT_WORDS)
         has_shower_phrase = any(phrase in normalized for phrase in ENERGYZEN_SHOWER_PHRASES)
 
-        return (has_tank_word and has_heat_word) or has_shower_phrase
+        return (has_tank_word and (has_status_word or has_heat_word)) or has_shower_phrase
 
     def _handle_shelly_command(self, user_input: str) -> str | None:
         """Handle configured Shelly device commands without calling Ollama."""
         command = self._match_shelly_command(user_input)
         if command is None:
-            return None
+            near_command = self._near_shelly_command(user_input)
+            if near_command is None:
+                return None
+            score, command_kind, device, is_unique_device = near_command
+            can_run_automatically = (
+                score >= SHELLY_AUTO_MATCH_THRESHOLD
+                and is_unique_device
+                and command_kind in {"on", "off", "status"}
+                and _is_safe_light_device(device)
+            )
+            if not can_run_automatically:
+                self.pending_shelly_confirmation = PendingShellyConfirmation(command_kind, device, time.monotonic())
+                return _shelly_confirmation_question(command_kind, device)
+        else:
+            command_kind, device = command
 
-        command_kind, device = command
+        return self._execute_shelly_action(command_kind, device)
 
+    def _execute_shelly_action(self, command_kind: str, device: shelly.ShellyDevice) -> str:
         try:
             if command_kind == "on":
                 shelly.switch_on(device.ip, device.channel)
@@ -456,6 +555,27 @@ class Brain:
                 if match is not None:
                     return match, device
         return None
+
+    def _near_shelly_command(self, user_input: str) -> tuple[float, str, shelly.ShellyDevice, bool] | None:
+        normalized = _normalize_command_text(user_input)
+        best: tuple[float, str, shelly.ShellyDevice] | None = None
+        device_scores: dict[shelly.ShellyDevice, float] = {}
+        for device in shelly.load_devices(self.devices_path).values():
+            for alias in _shelly_device_aliases(device):
+                for kind, phrases in _shelly_alias_command_phrases(alias).items():
+                    for phrase in phrases:
+                        score = difflib.SequenceMatcher(None, normalized, phrase).ratio()
+                        if score > device_scores.get(device, 0.0):
+                            device_scores[device] = score
+                        if best is None or score > best[0]:
+                            best = (score, kind, device)
+        if best is None or best[0] < SHELLY_NEAR_MATCH_THRESHOLD:
+            return None
+        is_unique_device = all(
+            device == best[2] or score < best[0] - SHELLY_AMBIGUITY_MARGIN
+            for device, score in device_scores.items()
+        )
+        return best[0], best[1], best[2], is_unique_device
 
     def respond_with_ai(self, user_input: str) -> str:
         """Return an AI response and update short conversation history."""

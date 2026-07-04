@@ -10,6 +10,7 @@ from core.brain import (
     CONVERSATION_HISTORY_LIMIT,
     MEMORY_PATH,
     USER_PROFILE_PATH,
+    _normalize_command_text,
     initialize_local_memory_files,
     load_personality,
 )
@@ -38,6 +39,13 @@ class FakeSystemStatus:
 
     def answer(self, message):
         return self.answers.get(message)
+
+
+def test_normalize_command_text_fixes_conservative_voice_errors():
+    assert _normalize_command_text("Vaita krillikatoksen valot päälle.") == "laita krillikatoksen valot paalle"
+    assert _normalize_command_text("Aita krillikatoksen valot päälle.") == "laita krillikatoksen valot paalle"
+    assert _normalize_command_text("Laita krillikatoksen malot päälle.") == "laita krillikatoksen valot paalle"
+    assert _normalize_command_text("Sytytä krillikatoksen valot.") == "sytyta krillikatoksen valot"
 
 
 def test_wake_command_returns_local_response_without_ollama():
@@ -520,6 +528,220 @@ def test_track_identification_intents_are_handled_before_memory_or_fallback(monk
     assert brain.respond("mikä biisi") == "Nyt soi ReinaRi – Spiritual Chemistry."
     assert brain.respond("kuka soi") == "Nyt soi ReinaRi – Spiritual Chemistry."
     assert client.calls == []
+
+
+def test_energyzen_hot_water_voice_variants_are_handled_without_ollama(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=62, bottom_temp=50, heating=True),
+    )
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+    expected = (
+        "Varaajan yläosa on 62 astetta, alaosa 50 astetta. "
+        "Lämmitys on päällä ja lämmintä vettä riittää arviolta 7 suihkuun."
+    )
+
+    for command in [
+        "Kuinka paljon lämmintä vettä on varaajassa",
+        "Mikä on varaajan lämpötilon",
+        "Paljonko varaajassa on lämmintä vettä",
+        "Mikä on varaajan lämpötila",
+    ]:
+        assert brain.respond(command) == expected
+
+    assert client.calls == []
+
+
+def test_unrelated_sentence_does_not_match_energyzen():
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi")
+
+    assert brain._matches_energyzen_command("kuinka paljon jazzia soitetaan") is False
+
+
+def _write_test_shelly_devices(path):
+    path.write_text(
+        """
+devices:
+  krillikatoksen_valot:
+    type: shelly
+    ip: 192.0.2.10
+    channel: 0
+    aliases:
+      - krillikatoksen valot
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_strong_near_shelly_light_commands_execute_automatically(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", devices_path=devices_path)
+    calls = []
+
+    monkeypatch.setattr(shelly, "switch_off", lambda ip, channel=0: calls.append((ip, channel)))
+
+    assert brain.respond("Ammuta krillikatoksen valot.") == "Grillikatoksen valot sammutettu."
+    assert brain.respond("Sammuta kriillikatoksen valot.") == "Grillikatoksen valot sammutettu."
+    assert calls == [("192.0.2.10", 0), ("192.0.2.10", 0)]
+    assert client.calls == []
+
+
+def test_medium_near_shelly_command_returns_confirmation_without_rpc(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+
+    def fail_rpc(*args, **kwargs):
+        raise AssertionError("medium Shelly match must not call RPC")
+
+    monkeypatch.setattr(shelly, "switch_off", fail_rpc)
+
+    assert brain.respond("Sammuta krillikatoksen.") == "Tarkoititko sammuttaa krillikatoksen valot?"
+
+
+def test_pending_shelly_confirmation_yes_executes_action(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+    calls = []
+
+    monkeypatch.setattr(shelly, "switch_off", lambda ip, channel=0: calls.append((ip, channel)))
+
+    assert brain.respond("Sammuta krillikatoksen.") == "Tarkoititko sammuttaa krillikatoksen valot?"
+    assert brain.pending_shelly_confirmation is not None
+    assert brain.respond("kyllä") == "Grillikatoksen valot sammutettu."
+    assert calls == [("192.0.2.10", 0)]
+    assert brain.pending_shelly_confirmation is None
+
+
+def test_pending_shelly_confirmation_joo_executes_action(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+    calls = []
+
+    monkeypatch.setattr(shelly, "switch_off", lambda ip, channel=0: calls.append((ip, channel)))
+
+    assert brain.respond("Sammuta krillikatoksen.") == "Tarkoititko sammuttaa krillikatoksen valot?"
+    assert brain.respond("joo") == "Grillikatoksen valot sammutettu."
+    assert calls == [("192.0.2.10", 0)]
+
+
+def test_pending_shelly_confirmation_no_cancels_action(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+
+    def fail_rpc(*args, **kwargs):
+        raise AssertionError("cancelled Shelly confirmation must not call RPC")
+
+    monkeypatch.setattr(shelly, "switch_off", fail_rpc)
+
+    assert brain.respond("Sammuta krillikatoksen.") == "Tarkoititko sammuttaa krillikatoksen valot?"
+    assert brain.respond("ei") == "Selvä, en tehnyt muutoksia."
+    assert brain.pending_shelly_confirmation is None
+
+
+def test_expired_pending_shelly_confirmation_does_not_execute(monkeypatch, tmp_path):
+    from core import brain as brain_module
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    now = 1000.0
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+
+    monkeypatch.setattr(brain_module.time, "monotonic", lambda: now)
+
+    def fail_rpc(*args, **kwargs):
+        raise AssertionError("expired Shelly confirmation must not call RPC")
+
+    monkeypatch.setattr(shelly, "switch_off", fail_rpc)
+
+    assert brain.respond("Sammuta krillikatoksen.") == "Tarkoititko sammuttaa krillikatoksen valot?"
+    now = 1031.0
+    assert brain.respond("kyllä") == "Varmistus vanheni, en tehnyt muutoksia."
+    assert brain.pending_shelly_confirmation is None
+
+
+def test_strong_near_shelly_non_light_device_returns_confirmation(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    devices_path.write_text(
+        """
+devices:
+  krillikatoksen_rele:
+    type: switch
+    ip: 192.0.2.11
+    channel: 0
+    aliases:
+      - krillikatoksen rele
+""".strip(),
+        encoding="utf-8",
+    )
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+
+    def fail_rpc(*args, **kwargs):
+        raise AssertionError("non-light near match must not call RPC")
+
+    monkeypatch.setattr(shelly, "switch_off", fail_rpc)
+
+    assert brain.respond("Ammuta krillikatoksen rele.") == "Tarkoititko sammuttaa krillikatoksen rele?"
+
+
+def test_shelly_voice_error_normalization_can_still_match_exact_command(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", devices_path=devices_path)
+    calls = []
+
+    monkeypatch.setattr(shelly, "switch_on", lambda ip, channel=0: calls.append((ip, channel)))
+
+    assert brain.respond("Laita krillikatoksen malot päälle.") == "Grillikatoksen valot sytytetty."
+    assert calls == [("192.0.2.10", 0)]
+    assert client.calls == []
+
+
+def test_unrelated_sentence_does_not_return_shelly_confirmation(tmp_path):
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+
+    assert brain.handle_local_command("tänään söin puuroa") is None
+
+
+def test_existing_shelly_command_still_executes_exactly(monkeypatch, tmp_path):
+    from core import shelly
+
+    devices_path = tmp_path / "devices.local.yaml"
+    _write_test_shelly_devices(devices_path)
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi", devices_path=devices_path)
+    calls = []
+
+    monkeypatch.setattr(shelly, "switch_off", lambda ip, channel=0: calls.append((ip, channel)))
+
+    assert brain.respond("Sammuta krillikatoksen valot.") == "Grillikatoksen valot sammutettu."
+    assert calls == [("192.0.2.10", 0)]
 
 
 def test_format_duration_returns_compact_finnish_uptime():
@@ -1467,6 +1689,14 @@ def test_transcribe_audio_returns_clear_error_when_model_missing(monkeypatch):
         assert "missing-model" in error.detail
     else:
         raise AssertionError("Expected STTError")
+
+
+def test_clean_text_for_speech_removes_emoji_only_for_tts_text():
+    from core import tts
+
+    assert tts.clean_text_for_speech("Hyvä homma 😊") == "Hyvä homma"
+    assert tts.clean_text_for_speech("Soitan 🎵 jazzia 🔥") == "Soitan jazzia"
+    assert tts.clean_text_for_speech("Normaali teksti ei muutu.") == "Normaali teksti ei muutu."
 
 
 def test_normalize_for_speech_converts_technical_units_and_marks():

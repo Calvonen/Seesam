@@ -38,7 +38,7 @@ PAUSE_COMMANDS = {
     "spotify tauko",
     "musiikki tauko",
 }
-NEXT_COMMANDS = {"seuraava", "seuraava biisi", "seuraava kappale"}
+NEXT_COMMANDS = {"seuraava", "seuraava biisi", "seuraava kappale", "skippaa"}
 PREVIOUS_COMMANDS = {"edellinen", "edellinen biisi", "edellinen kappale"}
 STATUS_COMMANDS = {
     "spotify",
@@ -58,6 +58,11 @@ VOLUME_UP_COMMANDS = {"musiikki kovemmalle"}
 VOLUME_DOWN_COMMANDS = {"musiikki hiljemmalle"}
 DEFAULT_VOLUME_UP = 90
 DEFAULT_VOLUME_DOWN = 50
+VOLUME_STEP = 10
+VOLUME_DOWN_WORDS = {"iljenpa", "hiljenpa", "hiljenpaa", "hiljempaa", "hiljemmalle", "hiljasemmalle", "pienemmalle", "pienemmaksi", "pienenna", "pienen"}
+VOLUME_UP_WORDS = {"kovempaa", "kovemmalle", "isommalle", "lisaa"}
+VOLUME_CONTEXT_WORDS = {"musiikki", "spotify", "volume", "volumea", "volyymi", "volyymia", "aani", "aanta"}
+VOLUME_COMMAND_WORDS = {"laita", "pista", "pienenna", "pienen", "lisaa"}
 SPOTIFY_WORD_ALIASES = {
     "potifi": "spotify",
     "potifissa": "spotifyssa",
@@ -66,6 +71,42 @@ SPOTIFY_WORD_ALIASES = {
     "spotifi": "spotify",
     "spotfy": "spotify",
     "spottify": "spotify",
+}
+HOME_CONTROL_WORDS = {
+    "valo",
+    "valot",
+    "lamppu",
+    "lamput",
+    "pistorasia",
+    "grillikatos",
+    "grillikatoksen",
+    "olohuone",
+    "keittio",
+    "katos",
+}
+GENRE_WORDS = {
+    "ambient",
+    "ambienttia",
+    "blues",
+    "country",
+    "disco",
+    "elektro",
+    "funk",
+    "jazz",
+    "jazzia",
+    "metalli",
+    "poppia",
+    "pop",
+    "punk",
+    "rap",
+    "reggae",
+    "rock",
+    "rockia",
+    "soul",
+    "soulia",
+    "suomirock",
+    "techno",
+    "technoa",
 }
 
 
@@ -92,11 +133,38 @@ def handle_spotify_command(text: str) -> str | None:
     volume = _volume_percent_from_words(words)
     if volume is not None:
         return _volume_response(volume)
+
+    adjustment = _volume_adjustment_from_words(words)
+    if adjustment is not None:
+        return _volume_adjustment_response(adjustment)
+
+    search_request = _search_play_request(words)
+    if search_request is not None:
+        query, types = search_request
+        return _search_play_response(query, types)
     return None
 
 
 def _play_response() -> str:
     return _run_spotify_action(_transfer_and_play, "Soitan Spotifystä.", ensure_output=True)
+
+
+def _search_play_response(query: str, types: str) -> str:
+    return _run_spotify_action(
+        lambda: _search_and_play(query, types),
+        f"Soitan Spotifystä: {query}.",
+        ensure_output=True,
+    )
+
+
+def _search_and_play(query: str, types: str) -> None:
+    result = spotify_client.search(query, types=types, limit=5)
+    uri = _first_search_uri(result, types)
+    if not uri:
+        raise SpotifyClientError(f"Spotify-hakutulosta ei löytynyt haulle {query}.")
+    device_id = _get_seesam_device_id()
+    spotify_client.transfer_playback(device_id, play=False)
+    spotify_client.play_uri(uri, device_id=device_id)
 
 
 def _volume_response(percent: int) -> str:
@@ -108,12 +176,105 @@ def _volume_response(percent: int) -> str:
 
 
 def _volume_percent_from_words(words: list[str]) -> int | None:
-    if len(words) == 2 and words[0] in {"aani", "volyymi"} and words[1].isdigit():
+    if len(words) == 2 and words[0] in {"aani", "volyymi", "volume"} and words[1].isdigit():
         return int(words[1])
     if len(words) == 3 and words[0] == "spotify" and words[1] in {"volume", "volyymi", "aani"} and words[2].isdigit():
         return int(words[2])
-    if len(words) == 3 and words[0] == "musiikki" and words[1] in {"aani", "volyymi"} and words[2].isdigit():
+    if len(words) == 3 and words[0] == "musiikki" and words[1].isdigit() and words[2] == "prosenttia":
+        return int(words[1])
+    if len(words) == 3 and words[0] == "musiikki" and words[1] in {"aani", "volyymi", "volume"} and words[2].isdigit():
         return int(words[2])
+    return None
+
+
+def _volume_adjustment_from_words(words: list[str]) -> int | None:
+    word_set = set(words)
+    has_down_word = bool(word_set & VOLUME_DOWN_WORDS)
+    has_up_word = bool(word_set & VOLUME_UP_WORDS)
+    if not has_down_word and not has_up_word:
+        return None
+
+    has_context = bool(word_set & VOLUME_CONTEXT_WORDS) or bool(word_set & VOLUME_COMMAND_WORDS) or "vahan" in word_set
+    if not has_context:
+        return None
+    if has_down_word:
+        return -VOLUME_STEP
+    return VOLUME_STEP
+
+
+def _volume_adjustment_response(adjustment: int) -> str:
+    current_volume = _current_volume_percent()
+    if current_volume is None:
+        volume = DEFAULT_VOLUME_UP if adjustment > 0 else DEFAULT_VOLUME_DOWN
+    else:
+        volume = current_volume + adjustment
+    return _volume_response(volume)
+
+
+def _current_volume_percent() -> int | None:
+    try:
+        playback = spotify_client.get_current_playback()
+    except (SpotifyClientError, SpotifyAuthError):
+        return None
+    device = (playback or {}).get("device")
+    if not isinstance(device, dict):
+        return None
+    volume = device.get("volume_percent")
+    if isinstance(volume, int):
+        return volume
+    return None
+
+
+def _search_play_request(words: list[str]) -> tuple[str, str] | None:
+    if _looks_like_home_control(words):
+        return None
+
+    if len(words) >= 2 and words[0] in {"soita", "laita"}:
+        query_words = words[1:]
+    elif len(words) >= 3 and words[0] in {"hae", "etsi"} and words[1] == "spotify":
+        query_words = words[2:]
+    else:
+        return None
+
+    types = "track,artist,playlist"
+    if "kappale" in query_words or "biisi" in query_words:
+        types = "track"
+        query_words = [word for word in query_words if word not in {"kappale", "biisi"}]
+    elif "artisti" in query_words:
+        types = "artist"
+        query_words = [word for word in query_words if word != "artisti"]
+    elif any(word in GENRE_WORDS for word in query_words):
+        types = "playlist,track"
+
+    query_words = [word for word in query_words if word not in {"jotain", "soimaan"}]
+    query = " ".join(query_words).strip()
+    if not query or query == "spotify":
+        return None
+    return query, types
+
+
+def _looks_like_home_control(words: list[str]) -> bool:
+    for word in words:
+        if word in HOME_CONTROL_WORDS:
+            return True
+        if word.endswith("n") and word[:-1] in HOME_CONTROL_WORDS:
+            return True
+    return False
+
+
+def _first_search_uri(result: dict[str, Any], types: str) -> str | None:
+    for item_type in types.split(","):
+        bucket = result.get(f"{item_type}s")
+        if not isinstance(bucket, dict):
+            continue
+        items = bucket.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                uri = str(item.get("uri") or "").strip()
+                if uri:
+                    return uri
     return None
 
 

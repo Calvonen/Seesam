@@ -50,6 +50,11 @@ class SpotifyClient:
         query = {"device_id": device_id} if device_id else None
         self._request("PUT", "/me/player/play", query=query)
 
+    def play_uri(self, uri: str, device_id: str | None = None) -> None:
+        query = {"device_id": device_id} if device_id else None
+        body = {"uris": [uri]} if uri.startswith("spotify:track:") else {"context_uri": uri}
+        self._request("PUT", "/me/player/play", query=query, body=body)
+
     def transfer_playback(self, device_id: str, play: bool = False) -> None:
         self._request("PUT", "/me/player", body={"device_ids": [device_id], "play": play})
 
@@ -129,6 +134,10 @@ def get_available_devices() -> list[dict[str, Any]]:
 
 def play(device_id: str | None = None) -> None:
     SpotifyClient().play(device_id)
+
+
+def play_uri(uri: str, device_id: str | None = None) -> None:
+    SpotifyClient().play_uri(uri, device_id)
 
 
 def transfer_playback(device_id: str, play: bool = False) -> None:

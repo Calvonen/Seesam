@@ -25,9 +25,15 @@ class TTSError(Exception):
         self.detail = detail
 
 
+def clean_text_for_speech(text: str) -> str:
+    """Remove characters that should not be spoken by TTS."""
+    cleaned = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\uFE0F]+", " ", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def normalize_for_speech(text: str) -> str:
     """Return text normalized for Finnish text-to-speech only."""
-    spoken = text.strip()
+    spoken = clean_text_for_speech(text)
     if not spoken:
         return ""
 
@@ -117,6 +123,8 @@ def synthesize_wav(text: str) -> bytes:
         raise TTSError(400, "Text must not be empty.")
 
     text = normalize_for_speech(text)
+    if not text:
+        raise TTSError(400, "Text must not be empty.")
 
     if not is_tts_enabled():
         raise TTSError(
@@ -195,6 +203,8 @@ def speak(text: str) -> None:
         return
 
     text = normalize_for_speech(text)
+    if not text:
+        return
 
     engine = os.environ.get("TTS_ENGINE", DEFAULT_TTS_ENGINE).strip().casefold()
     if engine != "piper":

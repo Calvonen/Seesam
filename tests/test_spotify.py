@@ -244,6 +244,44 @@ def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
     assert calls == ["pause"] * 6 + ["next"] * 3 + ["previous"] * 3
 
 
+def test_spotify_word_aliases_match_command_intents(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "transfer_playback",
+        lambda device_id, play=False: calls.append(("transfer", device_id, play)),
+    )
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "get_currently_playing",
+        lambda: {"item": {"name": "Kappale", "artists": [{"name": "Artist"}]}},
+    )
+
+    for command in ["laita potifi päälle", "laita spotivy päälle", "soita spotifai"]:
+        assert spotify_commands.handle_spotify_command(command) == "Soitan Spotifystä."
+
+    assert spotify_commands.handle_spotify_command("pysäytä potifi") == "Tauko."
+    assert spotify_commands.handle_spotify_command("potifi tauko") == "Tauko."
+    assert spotify_commands.handle_spotify_command("mitä potifissa soi") == "Nyt soi Artist – Kappale."
+    assert calls == [
+        ("transfer", "seesam-id", False),
+        ("play", "seesam-id"),
+        ("transfer", "seesam-id", False),
+        ("play", "seesam-id"),
+        ("transfer", "seesam-id", False),
+        ("play", "seesam-id"),
+        "pause",
+        "pause",
+    ]
+
+
 def test_spotify_volume_phrase_variants(monkeypatch):
     from spotify import spotify_commands
 

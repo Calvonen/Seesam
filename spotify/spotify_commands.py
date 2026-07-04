@@ -58,6 +58,15 @@ VOLUME_UP_COMMANDS = {"musiikki kovemmalle"}
 VOLUME_DOWN_COMMANDS = {"musiikki hiljemmalle"}
 DEFAULT_VOLUME_UP = 90
 DEFAULT_VOLUME_DOWN = 50
+SPOTIFY_WORD_ALIASES = {
+    "potifi": "spotify",
+    "potifissa": "spotifyssa",
+    "spotivy": "spotify",
+    "spotifai": "spotify",
+    "spotifi": "spotify",
+    "spotfy": "spotify",
+    "spottify": "spotify",
+}
 
 
 def handle_spotify_command(text: str) -> str | None:
@@ -176,4 +185,10 @@ def _normalize(text: str) -> str:
     lowered = text.casefold().strip()
     lowered = lowered.translate(str.maketrans({"ä": "a", "ö": "o", "å": "a"}))
     lowered = re.sub(r"[^0-9a-z]+", " ", lowered)
-    return " ".join(lowered.split())
+    normalized = " ".join(lowered.split())
+    return _normalize_spotify_words(normalized)
+
+
+def _normalize_spotify_words(text: str) -> str:
+    words = [SPOTIFY_WORD_ALIASES.get(word, word) for word in text.split()]
+    return " ".join(words)

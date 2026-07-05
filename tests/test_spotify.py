@@ -3,7 +3,18 @@ import hashlib
 import time
 from pathlib import Path
 
+import pytest
+
 from audio.audio_manager import AudioResult, SPEAKERS_SLEEPING_MESSAGE
+
+
+@pytest.fixture(autouse=True)
+def reset_spotify_volume_pending():
+    from spotify import spotify_commands
+
+    spotify_commands._pending_volume_adjustment = None
+    yield
+    spotify_commands._pending_volume_adjustment = None
 
 
 def test_pkce_code_challenge_matches_s256():
@@ -172,8 +183,8 @@ def test_spotify_volume_command_targets_seesam_device(monkeypatch):
         lambda percent, device_id=None: calls.append((percent, device_id)),
     )
 
-    assert spotify_commands.handle_spotify_command("spotify volume 80") == "Musiikin äänenvoimakkuus 80 prosenttia."
-    assert spotify_commands.handle_spotify_command("musiikki ääni 90") == "Musiikin äänenvoimakkuus 90 prosenttia."
+    assert spotify_commands.handle_spotify_command("spotify volume 80") == "Volume 80"
+    assert spotify_commands.handle_spotify_command("musiikki ääni 90") == "Volume 90"
     assert calls == [(80, "seesam-id"), (90, "seesam-id")]
 
 
@@ -390,6 +401,67 @@ def test_spotify_search_play_reports_missing_result(monkeypatch):
     )
 
 
+def test_spotify_uncertain_volume_adjustment_confirmation(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_current_playback", lambda: {"device": {"volume_percent": 60}})
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "set_volume",
+        lambda percent, device_id=None: calls.append((percent, device_id)),
+    )
+
+    assert spotify_commands.handle_spotify_command("paita kovempaa") == "Tarkoititko laittaa musiikkia kovemmalle?"
+    assert spotify_commands.handle_spotify_command("kyllä") == "Volume 70"
+    assert spotify_commands.handle_spotify_command("paita hiljempaa") == "Tarkoititko laittaa musiikkia hiljemmalle?"
+    assert spotify_commands.handle_spotify_command("yllä") == "Volume 50"
+    assert calls == [(70, "seesam-id"), (50, "seesam-id")]
+
+
+def test_spotify_uncertain_volume_adjustment_can_be_cancelled(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "set_volume", lambda percent, device_id=None: calls.append(percent))
+
+    assert spotify_commands.handle_spotify_command("paita kovempaa") == "Tarkoititko laittaa musiikkia kovemmalle?"
+    assert spotify_commands.handle_spotify_command("ei") == "Selvä, en tehnyt muutoksia."
+    assert calls == []
+
+
+def test_spotify_yes_without_pending_does_not_start_playback(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append("play"))
+
+    assert spotify_commands.handle_spotify_command("kyllä") is None
+    assert calls == []
+
+
+def test_spotify_volume_regressions_after_confirmation_guard(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_current_playback", lambda: {"device": {"volume_percent": 60}})
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: calls.append(("transfer", device_id, play)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "set_volume", lambda percent, device_id=None: calls.append(("volume", percent, device_id)))
+
+    assert spotify_commands.handle_spotify_command("laita spotify päälle") == "Soitan Spotifystä."
+    assert spotify_commands.handle_spotify_command("laita vähän hiljempaa") == "Volume 50"
+    assert calls == [("transfer", "seesam-id", False), ("play", "seesam-id"), ("volume", 50, "seesam-id")]
+
+
 def test_spotify_volume_phrase_variants(monkeypatch):
     from spotify import spotify_commands
 
@@ -403,9 +475,9 @@ def test_spotify_volume_phrase_variants(monkeypatch):
         lambda percent, device_id=None: calls.append((percent, device_id)),
     )
 
-    assert spotify_commands.handle_spotify_command("spotify ääni 80") == "Musiikin äänenvoimakkuus 80 prosenttia."
-    assert spotify_commands.handle_spotify_command("musiikki hiljemmalle") == "Musiikin äänenvoimakkuus 50 prosenttia."
-    assert spotify_commands.handle_spotify_command("musiikki kovemmalle") == "Musiikin äänenvoimakkuus 90 prosenttia."
+    assert spotify_commands.handle_spotify_command("spotify ääni 80") == "Volume 80"
+    assert spotify_commands.handle_spotify_command("musiikki hiljemmalle") == "Volume 50"
+    assert spotify_commands.handle_spotify_command("musiikki kovemmalle") == "Volume 90"
     assert calls == [(80, "seesam-id"), (50, "seesam-id"), (90, "seesam-id")]
 
 
@@ -431,10 +503,10 @@ def test_spotify_volume_speech_adjustments_use_current_volume(monkeypatch):
         "pienen volumea",
         "pistä musiikkia hiljemmalle",
     ]:
-        assert spotify_commands.handle_spotify_command(command) == "Musiikin äänenvoimakkuus 50 prosenttia."
+        assert spotify_commands.handle_spotify_command(command) == "Volume 50"
 
     for command in ["lisää volumea", "laita kovemmalle", "pistä musiikkia kovemmalle"]:
-        assert spotify_commands.handle_spotify_command(command) == "Musiikin äänenvoimakkuus 70 prosenttia."
+        assert spotify_commands.handle_spotify_command(command) == "Volume 70"
 
     assert calls == [(50, "seesam-id")] * 6 + [(70, "seesam-id")] * 3
 
@@ -466,9 +538,9 @@ def test_spotify_volume_percent_speech_variants(monkeypatch):
         lambda percent, device_id=None: calls.append((percent, device_id)),
     )
 
-    assert spotify_commands.handle_spotify_command("volume 30") == "Musiikin äänenvoimakkuus 30 prosenttia."
-    assert spotify_commands.handle_spotify_command("ääni 40") == "Musiikin äänenvoimakkuus 40 prosenttia."
-    assert spotify_commands.handle_spotify_command("musiikki 50 prosenttia") == "Musiikin äänenvoimakkuus 50 prosenttia."
+    assert spotify_commands.handle_spotify_command("volume 30") == "Volume 30"
+    assert spotify_commands.handle_spotify_command("ääni 40") == "Volume 40"
+    assert spotify_commands.handle_spotify_command("musiikki 50 prosenttia") == "Volume 50"
 
     assert calls == [(30, "seesam-id"), (40, "seesam-id"), (50, "seesam-id")]
 

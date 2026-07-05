@@ -63,6 +63,10 @@ VOLUME_DOWN_WORDS = {"iljenpa", "hiljenpa", "hiljenpaa", "hiljempaa", "hiljemmal
 VOLUME_UP_WORDS = {"kovempaa", "kovemmalle", "isommalle", "lisaa"}
 VOLUME_CONTEXT_WORDS = {"musiikki", "spotify", "volume", "volumea", "volyymi", "volyymia", "aani", "aanta"}
 VOLUME_COMMAND_WORDS = {"laita", "pista", "pienenna", "pienen", "lisaa"}
+VOLUME_CONFIRMATION_YES = {"kylla", "joo", "juu", "ok", "okei", "ylla"}
+VOLUME_CONFIRMATION_NO = {"ei", "ala", "peruuta", "unohda"}
+UNCERTAIN_VOLUME_START_WORDS = {"laita", "pista"}
+_pending_volume_adjustment: int | None = None
 SPOTIFY_WORD_ALIASES = {
     "potifi": "spotify",
     "potifissa": "spotifyssa",
@@ -112,8 +116,20 @@ GENRE_WORDS = {
 
 def handle_spotify_command(text: str) -> str | None:
     """Return a short local response for Spotify commands, or None if not matched."""
+    global _pending_volume_adjustment
+
     normalized = _normalize(text)
     words = normalized.split()
+
+    if _pending_volume_adjustment is not None and normalized in VOLUME_CONFIRMATION_YES:
+        adjustment = _pending_volume_adjustment
+        _pending_volume_adjustment = None
+        return _volume_adjustment_response(adjustment)
+    if _pending_volume_adjustment is not None and normalized in VOLUME_CONFIRMATION_NO:
+        _pending_volume_adjustment = None
+        return "Selvä, en tehnyt muutoksia."
+    if normalized in VOLUME_CONFIRMATION_YES:
+        return None
 
     if normalized in STATUS_COMMANDS:
         return _currently_playing_response()
@@ -137,6 +153,12 @@ def handle_spotify_command(text: str) -> str | None:
     adjustment = _volume_adjustment_from_words(words)
     if adjustment is not None:
         return _volume_adjustment_response(adjustment)
+
+    uncertain_adjustment = _uncertain_volume_adjustment_from_words(words)
+    if uncertain_adjustment is not None:
+        _pending_volume_adjustment = uncertain_adjustment
+        direction = "kovemmalle" if uncertain_adjustment > 0 else "hiljemmalle"
+        return f"Tarkoititko laittaa musiikkia {direction}?"
 
     search_request = _search_play_request(words)
     if search_request is not None:
@@ -171,7 +193,7 @@ def _volume_response(percent: int) -> str:
     volume = max(0, min(100, percent))
     return _run_spotify_action(
         lambda: _set_seesam_volume(volume),
-        f"Musiikin äänenvoimakkuus {volume} prosenttia.",
+        f"Volume {volume}",
     )
 
 
@@ -200,6 +222,43 @@ def _volume_adjustment_from_words(words: list[str]) -> int | None:
     if has_down_word:
         return -VOLUME_STEP
     return VOLUME_STEP
+
+
+def _uncertain_volume_adjustment_from_words(words: list[str]) -> int | None:
+    if not words or _volume_adjustment_from_words(words) is not None:
+        return None
+
+    word_set = set(words)
+    has_down_word = bool(word_set & VOLUME_DOWN_WORDS)
+    has_up_word = bool(word_set & VOLUME_UP_WORDS)
+    if not has_down_word and not has_up_word:
+        return None
+    if not _looks_like_uncertain_volume_start(words[0]):
+        return None
+    if has_down_word:
+        return -VOLUME_STEP
+    return VOLUME_STEP
+
+
+def _looks_like_uncertain_volume_start(word: str) -> bool:
+    if word in UNCERTAIN_VOLUME_START_WORDS:
+        return True
+    return any(_edit_distance_at_most_one(word, expected) for expected in UNCERTAIN_VOLUME_START_WORDS)
+
+
+def _edit_distance_at_most_one(left: str, right: str) -> bool:
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if left == right:
+        return True
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) <= 1
+
+    shorter, longer = (left, right) if len(left) < len(right) else (right, left)
+    for index in range(len(longer)):
+        if shorter == longer[:index] + longer[index + 1 :]:
+            return True
+    return False
 
 
 def _volume_adjustment_response(adjustment: int) -> str:

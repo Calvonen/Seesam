@@ -25,15 +25,27 @@ class TTSError(Exception):
         self.detail = detail
 
 
+TEXT_EMOTICON_PATTERN = re.compile(
+    r"(?<!\w)(?:[:;=8xX][-oO']?[)(DPp/\\]|[)(][-oO']?[:;=8xX]|<3)(?!\w)"
+)
+EMOJI_PATTERN = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\uFE0F]+")
+
+
+def sanitize_text_for_tts(text: str) -> str:
+    """Remove emoji and text emoticons from text sent to TTS only."""
+    cleaned = EMOJI_PATTERN.sub(" ", text)
+    cleaned = TEXT_EMOTICON_PATTERN.sub(" ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def clean_text_for_speech(text: str) -> str:
     """Remove characters that should not be spoken by TTS."""
-    cleaned = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\uFE0F]+", " ", text)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return sanitize_text_for_tts(text)
 
 
 def normalize_for_speech(text: str) -> str:
     """Return text normalized for Finnish text-to-speech only."""
-    spoken = clean_text_for_speech(text)
+    spoken = sanitize_text_for_tts(text)
     if not spoken:
         return ""
 

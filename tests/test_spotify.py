@@ -344,7 +344,7 @@ def test_spotify_shutdown_medium_confidence_typo_asks_confirmation(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
     monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
 
-    assert spotify_commands.handle_spotify_command("samuta potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
     assert calls == []
 
 
@@ -356,7 +356,7 @@ def test_pending_spotify_confirmation_yes_executes_shutdown(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
     monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
 
-    assert spotify_commands.handle_spotify_command("samuta potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
     assert spotify_commands.handle_spotify_command("kyllä") == "Sammutin Spotifyn."
     assert calls == ["pause", "speaker_power_off"]
 
@@ -369,7 +369,7 @@ def test_pending_spotify_confirmation_no_cancels_shutdown(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
     monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
 
-    assert spotify_commands.handle_spotify_command("samuta potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
     assert spotify_commands.handle_spotify_command("ei") == "Selvä, en tehnyt muutoksia."
     assert calls == []
 
@@ -465,6 +465,42 @@ def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
         assert spotify_commands.handle_spotify_command(command) == "Nyt soi Artist – Kappale."
 
     assert calls == ["pause"] * 6 + ["next"] * 3 + ["previous"] * 3
+
+
+
+
+def test_spotify_status_typos_do_not_fall_through_to_ai(monkeypatch):
+    from core import commands
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "get_currently_playing",
+        lambda: calls.append("currently_playing") or {"item": {"name": "Kappale", "artists": [{"name": "Artist"}]}},
+    )
+
+    assert commands.handle_local_command("onko potify päällä") == "Nyt soi Artist – Kappale."
+    assert commands.handle_local_command("mikä on spotivyn tila") == "Nyt soi Artist – Kappale."
+    assert calls == ["currently_playing", "currently_playing"]
+
+
+def test_spotify_status_medium_confidence_typo_can_be_confirmed(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "get_currently_playing",
+        lambda: calls.append("currently_playing") or {"item": {"name": "Kappale", "artists": [{"name": "Artist"}]}},
+    )
+
+    assert spotify_commands.handle_spotify_command("spotfy sta") == "Tarkoititko kysyä Spotifyn tilaa?"
+    assert calls == []
+    assert spotify_commands.handle_spotify_command("juu") == "Nyt soi Artist – Kappale."
+    assert calls == ["currently_playing"]
 
 
 def test_spotify_word_aliases_match_command_intents(monkeypatch):

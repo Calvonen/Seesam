@@ -64,6 +64,9 @@ NEXT_COMMANDS = {"seuraava", "seuraava biisi", "seuraava kappale", "skippaa"}
 PREVIOUS_COMMANDS = {"edellinen", "edellinen biisi", "edellinen kappale"}
 STATUS_COMMANDS = {
     "spotify",
+    "onko spotify paalla",
+    "mika spotify tila",
+    "mika on spotifyn tila",
     "mita soi",
     "mika soi",
     "mika kappale",
@@ -93,9 +96,11 @@ UNCERTAIN_VOLUME_START_WORDS = {"laita", "pista"}
 _pending_volume_adjustment: int | None = None
 _pending_spotify_confirmation: str | None = None
 SPOTIFY_WORD_ALIASES = {
+    "potify": "spotify",
     "potifi": "spotify",
     "potifissa": "spotifyssa",
     "spotivy": "spotify",
+    "spotivyn": "spotifyn",
     "spotifai": "spotify",
     "spotifi": "spotify",
     "spotfy": "spotify",
@@ -217,6 +222,8 @@ def _spotify_command_response(command_kind: str) -> str:
         return _shutdown_response()
     if command_kind == "pause":
         return _run_spotify_action(spotify_client.pause, "Tauko.", ensure_output=False)
+    if command_kind == "status":
+        return _currently_playing_response()
     return None
 
 
@@ -238,6 +245,7 @@ def _near_spotify_command(normalized: str) -> tuple[float, str] | None:
         CommandDefinition("play", "soita spotify", _spotify_confirmation_question("play"), aliases=tuple(PLAY_COMMANDS)),
         CommandDefinition("pause", "pysayta spotify", _spotify_confirmation_question("pause"), aliases=tuple(PAUSE_COMMANDS)),
         CommandDefinition("shutdown", "sammuta spotify", _spotify_confirmation_question("shutdown"), aliases=tuple(SHUTDOWN_COMMANDS)),
+        CommandDefinition("status", "spotify status", _spotify_confirmation_question("status"), aliases=tuple(STATUS_COMMANDS)),
     ]
     match = match_command(
         normalized,
@@ -255,6 +263,8 @@ def _spotify_confirmation_question(command_kind: str) -> str:
         return "Tarkoititko sammuttaa Spotifyn?"
     if command_kind == "pause":
         return "Tarkoititko pysäyttää Spotifyn?"
+    if command_kind == "status":
+        return "Tarkoititko kysyä Spotifyn tilaa?"
     return "Tarkoititko käynnistää Spotifyn?"
 
 

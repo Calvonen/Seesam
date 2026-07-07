@@ -849,6 +849,73 @@ def test_general_fuzzy_below_threshold_uses_ai_fallback():
     assert len(client.calls) == 1
 
 
+
+
+def test_energyzen_fuzzy_temperature_typo_asks_confirmation(monkeypatch):
+    from core import energyzen
+
+    calls = []
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: calls.append("reading") or energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert calls == []
+
+
+def test_energyzen_fuzzy_temperature_confirmation_yes_executes(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert (
+        brain.respond("juu")
+        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+    )
+    assert client.calls == []
+
+
+def test_energyzen_fuzzy_hot_water_typo_executes_or_confirms(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=62, bottom_temp=50, heating=True),
+    )
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert (
+        brain.respond("paljonk lämmintä vett")
+        == "Varaajan yläosa on 62 astetta, alaosa 50 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 7 suihkuun."
+    )
+    assert brain.respond("palonko lämmmitä vett") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert client.calls == []
+
+
+def test_energyzen_fuzzy_confirmation_no_cancels(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(energyzen, "get_latest_reading", lambda: (_ for _ in ()).throw(AssertionError("cancelled command must not read tank")))
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert brain.respond("ei") == "Selvä, en tehnyt muutoksia."
+    assert client.calls == []
+
+
 def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(65) == "1 min"
     assert format_duration(3660) == "1 h 1 min"
@@ -1796,17 +1863,25 @@ def test_transcribe_audio_returns_clear_error_when_model_missing(monkeypatch):
         raise AssertionError("Expected STTError")
 
 
-def test_clean_text_for_speech_removes_emoji_only_for_tts_text():
+def test_sanitize_text_for_tts_removes_emoji_and_text_emoticons_only_for_tts_text():
     from core import tts
 
+    assert tts.sanitize_text_for_tts("Hyvä 👍") == "Hyvä"
+    assert tts.sanitize_text_for_tts("Valmis ✅") == "Valmis"
+    assert tts.sanitize_text_for_tts("Moi :)") == "Moi"
+    assert tts.sanitize_text_for_tts("Moi :-)") == "Moi"
+    assert tts.sanitize_text_for_tts("Hauskaa :D") == "Hauskaa"
+    assert tts.sanitize_text_for_tts("Virhe ❌ yritä uudelleen") == "Virhe yritä uudelleen"
+    assert tts.sanitize_text_for_tts("Soitan 🎵 jazzia 🔥") == "Soitan jazzia"
+    assert tts.sanitize_text_for_tts("Normaali teksti ei muutu.") == "Normaali teksti ei muutu."
     assert tts.clean_text_for_speech("Hyvä homma 😊") == "Hyvä homma"
-    assert tts.clean_text_for_speech("Soitan 🎵 jazzia 🔥") == "Soitan jazzia"
-    assert tts.clean_text_for_speech("Normaali teksti ei muutu.") == "Normaali teksti ei muutu."
 
 
 def test_normalize_for_speech_converts_technical_units_and_marks():
     from core import tts
 
+    assert tts.normalize_for_speech("Hyvä 👍 0.8 %") == "Hyvä 0,8 prosenttia"
+    assert tts.normalize_for_speech("Valmis ✅ 31 °C") == "Valmis 31 astetta"
     assert tts.normalize_for_speech("0.8 %") == "0,8 prosenttia"
     assert tts.normalize_for_speech("31 °C") == "31 astetta"
     assert tts.normalize_for_speech("506.3 GiB") == "506,3 gigaa"

@@ -744,6 +744,178 @@ def test_existing_shelly_command_still_executes_exactly(monkeypatch, tmp_path):
     assert calls == [("192.0.2.10", 0)]
 
 
+
+
+def test_general_fuzzy_local_command_high_confidence_executes_without_ai(monkeypatch):
+    from core import commands
+    from audio import audio_manager
+
+    calls = []
+    commands._pending_local_confirmation = None
+    monkeypatch.setattr(
+        commands,
+        "ensure_media_output",
+        lambda device_id=None: calls.append(device_id) or audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
+    )
+    monkeypatch.setattr(commands, "handle_spotify_command", lambda text: None)
+
+    assert handle_local_command("kaiutimet paalle") == "Steljes-kaiuttimet yhdistetty."
+    assert calls == ["steljes_ns3"]
+    commands._pending_local_confirmation = None
+
+
+def test_general_fuzzy_local_command_medium_confidence_asks_confirmation(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 12.5,
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "gpu": {},
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert client.calls == []
+
+
+def test_general_fuzzy_pending_yes_executes_local_command(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 12.5,
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "gpu": {},
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert brain.respond("jes") == "Kone on kunnossa. Prosessorin kuorma on 12,5 prosenttia, muistia on käytössä 12,5 prosenttia ja levytilaa on vapaana 90 gigaa."
+    assert client.calls == []
+
+
+def test_general_fuzzy_pending_no_cancels_local_command(monkeypatch):
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert brain.respond("en") == "Selvä, en tehnyt muutoksia."
+    assert client.calls == []
+
+
+def test_general_fuzzy_yes_without_pending_does_not_run_local_command():
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.handle_local_command("kyllä") is None
+
+
+def test_general_fuzzy_below_threshold_uses_ai_fallback():
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("xylophone foo") == "Vastaus 1"
+    assert len(client.calls) == 1
+
+
+
+
+def test_energyzen_fuzzy_temperature_typo_asks_confirmation(monkeypatch):
+    from core import energyzen
+
+    calls = []
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: calls.append("reading") or energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    brain = Brain(client=FakeOllamaClient(), personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert calls == []
+
+
+def test_energyzen_fuzzy_temperature_confirmation_yes_executes(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=58.2, bottom_temp=43.1, showers=0.1, heating=True),
+    )
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert (
+        brain.respond("juu")
+        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+    )
+    assert client.calls == []
+
+
+def test_energyzen_fuzzy_hot_water_typo_executes_or_confirms(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(
+        energyzen,
+        "get_latest_reading",
+        lambda: energyzen.TankReading(top_temp=62, bottom_temp=50, heating=True),
+    )
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert (
+        brain.respond("paljonk lämmintä vett")
+        == "Varaajan yläosa on 62 astetta, alaosa 50 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 7 suihkuun."
+    )
+    assert brain.respond("palonko lämmmitä vett") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert client.calls == []
+
+
+def test_energyzen_fuzzy_confirmation_no_cancels(monkeypatch):
+    from core import energyzen
+
+    monkeypatch.setattr(energyzen, "get_latest_reading", lambda: (_ for _ in ()).throw(AssertionError("cancelled command must not read tank")))
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
+    assert brain.respond("ei") == "Selvä, en tehnyt muutoksia."
+    assert client.calls == []
+
+
 def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(65) == "1 min"
     assert format_duration(3660) == "1 h 1 min"
@@ -1691,17 +1863,25 @@ def test_transcribe_audio_returns_clear_error_when_model_missing(monkeypatch):
         raise AssertionError("Expected STTError")
 
 
-def test_clean_text_for_speech_removes_emoji_only_for_tts_text():
+def test_sanitize_text_for_tts_removes_emoji_and_text_emoticons_only_for_tts_text():
     from core import tts
 
+    assert tts.sanitize_text_for_tts("Hyvä 👍") == "Hyvä"
+    assert tts.sanitize_text_for_tts("Valmis ✅") == "Valmis"
+    assert tts.sanitize_text_for_tts("Moi :)") == "Moi"
+    assert tts.sanitize_text_for_tts("Moi :-)") == "Moi"
+    assert tts.sanitize_text_for_tts("Hauskaa :D") == "Hauskaa"
+    assert tts.sanitize_text_for_tts("Virhe ❌ yritä uudelleen") == "Virhe yritä uudelleen"
+    assert tts.sanitize_text_for_tts("Soitan 🎵 jazzia 🔥") == "Soitan jazzia"
+    assert tts.sanitize_text_for_tts("Normaali teksti ei muutu.") == "Normaali teksti ei muutu."
     assert tts.clean_text_for_speech("Hyvä homma 😊") == "Hyvä homma"
-    assert tts.clean_text_for_speech("Soitan 🎵 jazzia 🔥") == "Soitan jazzia"
-    assert tts.clean_text_for_speech("Normaali teksti ei muutu.") == "Normaali teksti ei muutu."
 
 
 def test_normalize_for_speech_converts_technical_units_and_marks():
     from core import tts
 
+    assert tts.normalize_for_speech("Hyvä 👍 0.8 %") == "Hyvä 0,8 prosenttia"
+    assert tts.normalize_for_speech("Valmis ✅ 31 °C") == "Valmis 31 astetta"
     assert tts.normalize_for_speech("0.8 %") == "0,8 prosenttia"
     assert tts.normalize_for_speech("31 °C") == "31 astetta"
     assert tts.normalize_for_speech("506.3 GiB") == "506,3 gigaa"

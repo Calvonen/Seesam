@@ -9,12 +9,21 @@ from audio.audio_manager import AudioResult, SPEAKERS_SLEEPING_MESSAGE
 
 
 @pytest.fixture(autouse=True)
-def reset_spotify_volume_pending():
+def reset_spotify_volume_pending(monkeypatch, request):
     from spotify import spotify_commands
 
     spotify_commands._pending_volume_adjustment = None
+    spotify_commands._pending_spotify_confirmation = None
+    if request.node.name not in {
+        "test_ensure_speakers_powered_on_posts_to_hub_before_delay",
+        "test_ensure_speakers_powered_on_failure_does_not_sleep_or_raise",
+        "test_spotify_play_continues_when_speaker_power_on_fails",
+    }:
+        monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: None)
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: None)
     yield
     spotify_commands._pending_volume_adjustment = None
+    spotify_commands._pending_spotify_confirmation = None
 
 
 def test_pkce_code_challenge_matches_s256():
@@ -65,14 +74,78 @@ def test_spotify_play_transfers_to_seesam_before_api_play(monkeypatch):
     monkeypatch.setattr(
         spotify_commands,
         "ensure_default_media_output",
-        lambda: AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
+        lambda: calls.append("media_output") or AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
     )
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
         spotify_commands.spotify_client,
         "transfer_playback",
         lambda device_id, play=False: calls.append(("transfer", device_id, play)),
     )
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
+
+    assert spotify_commands.handle_spotify_command("soita spotify") == "Soitan Spotifystä."
+    assert calls == ["speaker_power_on", "media_output", ("transfer", "seesam-id", False), ("play", "seesam-id")]
+
+
+def test_ensure_speakers_powered_on_posts_to_hub_before_delay(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            calls.append("response_enter")
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            calls.append("response_exit")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_method(), request.data, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    spotify_commands.ensure_speakers_powered_on()
+
+    assert calls == [
+        ("http://192.168.68.74:8000/speakers/power-on", "POST", b"", 5),
+        "response_enter",
+        "response_exit",
+        ("sleep", 10),
+    ]
+
+
+def test_ensure_speakers_powered_on_failure_does_not_sleep_or_raise(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    def fail_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_method(), timeout))
+        raise OSError("hub unavailable")
+
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    spotify_commands.ensure_speakers_powered_on()
+
+    assert calls == [("http://192.168.68.74:8000/speakers/power-on", "POST", 5)]
+
+
+def test_spotify_play_continues_when_speaker_power_on_fails(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(OSError("hub unavailable")))
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: calls.append(("transfer", device_id, play)))
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
 
     assert spotify_commands.handle_spotify_command("soita spotify") == "Soitan Spotifystä."
@@ -84,16 +157,17 @@ def test_spotify_play_stops_when_media_output_fails(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(
         spotify_commands,
         "ensure_default_media_output",
-        lambda: AudioResult(False, SPEAKERS_SLEEPING_MESSAGE),
+        lambda: calls.append("media_output") or AudioResult(False, SPEAKERS_SLEEPING_MESSAGE),
     )
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: calls.append("devices"))
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append("play"))
 
     assert spotify_commands.handle_spotify_command("musiikki päälle") == "Kaiuttimet eivät vastaa. Herätä ne Bluetooth-tilaan."
-    assert calls == []
+    assert calls == ["speaker_power_on", "media_output"]
 
 
 def test_spotify_currently_playing_response(monkeypatch):
@@ -175,6 +249,11 @@ def test_spotify_volume_command_targets_seesam_device(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_on",
+        lambda: (_ for _ in ()).throw(AssertionError("volume command must not power on speakers")),
+    )
     monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
@@ -207,6 +286,8 @@ def test_spotify_play_intents_do_not_fall_through_to_fact_response(monkeypatch):
         "spotify päälle",
         "soita spotify",
         "toista spotify",
+        "käynnistä spotify",
+        "käynnistä musiikki",
         "musiikki päälle",
         "soita musiikkia",
         "jatka musiikkia",
@@ -216,7 +297,133 @@ def test_spotify_play_intents_do_not_fall_through_to_fact_response(monkeypatch):
     ]:
         assert spotify_commands.handle_spotify_command(command) == "Soitan Spotifystä."
 
-    assert len(calls) == 20
+    assert len(calls) == 24
+
+
+def test_spotify_start_aliases_work_like_play_commands(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: (_ for _ in ()).throw(AssertionError("play command must not power off speakers")))
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: calls.append(("transfer", device_id, play)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
+
+    assert spotify_commands.handle_spotify_command("käynnistä spotify") == "Soitan Spotifystä."
+    assert spotify_commands.handle_spotify_command("käynnistä musiikki") == "Soitan Spotifystä."
+    assert calls == [
+        ("transfer", "seesam-id", False),
+        ("play", "seesam-id"),
+        ("transfer", "seesam-id", False),
+        ("play", "seesam-id"),
+    ]
+
+
+def test_spotify_shutdown_high_confidence_typos_do_not_fall_through(monkeypatch):
+    from core import commands
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    for command in ["sammuta potify", "samuta spotify", "sammuta spotivy"]:
+        assert commands.handle_local_command(command) == "Sammutin Spotifyn."
+
+    assert calls == ["pause", "speaker_power_off"] * 3
+
+
+def test_spotify_shutdown_medium_confidence_typo_asks_confirmation(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert calls == []
+
+
+def test_pending_spotify_confirmation_yes_executes_shutdown(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert spotify_commands.handle_spotify_command("kyllä") == "Sammutin Spotifyn."
+    assert calls == ["pause", "speaker_power_off"]
+
+
+def test_pending_spotify_confirmation_no_cancels_shutdown(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    assert spotify_commands.handle_spotify_command("samut potify") == "Tarkoititko sammuttaa Spotifyn?"
+    assert spotify_commands.handle_spotify_command("ei") == "Selvä, en tehnyt muutoksia."
+    assert calls == []
+
+
+def test_spotify_shutdown_commands_pause_then_power_off(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_on",
+        lambda: (_ for _ in ()).throw(AssertionError("shutdown command must not power on speakers")),
+    )
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    for command in ["sammuta spotify", "sammuta musiikki", "sulje spotify", "musiikki pois", "spotify pois"]:
+        assert spotify_commands.handle_spotify_command(command) == "Sammutin Spotifyn."
+
+    assert calls == ["pause", "speaker_power_off"] * 5
+
+
+def test_spotify_shutdown_continues_when_pause_has_no_active_device(monkeypatch):
+    from spotify import spotify_commands
+    from spotify.spotify_client import SpotifyNoActiveDeviceError
+
+    calls = []
+
+    def fail_pause():
+        calls.append("pause")
+        raise SpotifyNoActiveDeviceError("no active device")
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", fail_pause)
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
+
+    assert spotify_commands.handle_spotify_command("sammuta spotify") == "Sammutin Spotifyn."
+    assert calls == ["pause", "speaker_power_off"]
+
+
+def test_spotify_shutdown_continues_when_speaker_power_off_fails(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_off",
+        lambda: calls.append("speaker_power_off") or (_ for _ in ()).throw(OSError("hub unavailable")),
+    )
+
+    assert spotify_commands.handle_spotify_command("sammuta spotify") == "Sammutin Spotifyn."
+    assert calls == ["pause", "speaker_power_off"]
 
 
 def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
@@ -224,6 +431,11 @@ def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_on",
+        lambda: (_ for _ in ()).throw(AssertionError("non-play command must not power on speakers")),
+    )
     monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
     monkeypatch.setattr(spotify_commands.spotify_client, "next_track", lambda: calls.append("next"))
     monkeypatch.setattr(spotify_commands.spotify_client, "previous_track", lambda: calls.append("previous"))
@@ -253,6 +465,42 @@ def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
         assert spotify_commands.handle_spotify_command(command) == "Nyt soi Artist – Kappale."
 
     assert calls == ["pause"] * 6 + ["next"] * 3 + ["previous"] * 3
+
+
+
+
+def test_spotify_status_typos_do_not_fall_through_to_ai(monkeypatch):
+    from core import commands
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "get_currently_playing",
+        lambda: calls.append("currently_playing") or {"item": {"name": "Kappale", "artists": [{"name": "Artist"}]}},
+    )
+
+    assert commands.handle_local_command("onko potify päällä") == "Nyt soi Artist – Kappale."
+    assert commands.handle_local_command("mikä on spotivyn tila") == "Nyt soi Artist – Kappale."
+    assert calls == ["currently_playing", "currently_playing"]
+
+
+def test_spotify_status_medium_confidence_typo_can_be_confirmed(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        spotify_commands.spotify_client,
+        "get_currently_playing",
+        lambda: calls.append("currently_playing") or {"item": {"name": "Kappale", "artists": [{"name": "Artist"}]}},
+    )
+
+    assert spotify_commands.handle_spotify_command("spotfy sta") == "Tarkoititko kysyä Spotifyn tilaa?"
+    assert calls == []
+    assert spotify_commands.handle_spotify_command("juu") == "Nyt soi Artist – Kappale."
+    assert calls == ["currently_playing"]
 
 
 def test_spotify_word_aliases_match_command_intents(monkeypatch):
@@ -440,6 +688,8 @@ def test_spotify_yes_without_pending_does_not_start_playback(monkeypatch):
     calls = []
 
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append("play"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_off", lambda: calls.append("speaker_power_off"))
 
     assert spotify_commands.handle_spotify_command("kyllä") is None
     assert calls == []
@@ -551,6 +801,7 @@ def test_spotify_search_still_handles_genre_after_volume_phrases(monkeypatch):
     calls = []
 
     monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
         spotify_commands.spotify_client,
@@ -562,7 +813,7 @@ def test_spotify_search_still_handles_genre_after_volume_phrases(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append((uri, device_id)))
 
     assert spotify_commands.handle_spotify_command("soita jazzia") == "Soitan Spotifystä: jazzia."
-    assert calls == [("jazzia", "playlist,track", 5), ("spotify:playlist:jazz", "seesam-id")]
+    assert calls == ["speaker_power_on", ("jazzia", "playlist,track", 5), ("spotify:playlist:jazz", "seesam-id")]
 
 
 def test_spotify_client_search_and_play_uri_use_web_api(monkeypatch):

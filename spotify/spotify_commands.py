@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import re
+import time
+import urllib.request
 from typing import Any
 
 from audio.audio_manager import SPEAKERS_SLEEPING_MESSAGE, ensure_default_media_output
+from core.command_matcher import (
+    AUTO_MATCH_THRESHOLD,
+    CONFIRM_MATCH_THRESHOLD,
+    CommandDefinition,
+    is_confirmation_no,
+    is_confirmation_yes,
+    match_command,
+)
 from spotify import spotify_client
 from spotify.spotify_auth import SpotifyAuthError
 from spotify.spotify_client import (
@@ -17,12 +27,17 @@ from spotify.spotify_client import (
 )
 
 MEDIA_OUTPUT_FAILURE_MESSAGE = "Kaiuttimet eivät vastaa. Herätä ne Bluetooth-tilaan."
+SEESAM_HUB_BASE_URL = "http://192.168.68.74:8000"
+SPEAKER_POWER_ON_DELAY_SECONDS = 10
+SPEAKER_POWER_ON_TIMEOUT_SECONDS = 5
 SEESAM_DEVICE_NAME = "Seesam"
 PLAY_COMMANDS = {
     "laita spotify paalle",
     "spotify paalle",
     "soita spotify",
     "toista spotify",
+    "kaynnista spotify",
+    "kaynnista musiikki",
     "musiikki paalle",
     "soita musiikkia",
     "jatka musiikkia",
@@ -38,10 +53,20 @@ PAUSE_COMMANDS = {
     "spotify tauko",
     "musiikki tauko",
 }
+SHUTDOWN_COMMANDS = {
+    "sammuta spotify",
+    "sammuta musiikki",
+    "sulje spotify",
+    "musiikki pois",
+    "spotify pois",
+}
 NEXT_COMMANDS = {"seuraava", "seuraava biisi", "seuraava kappale", "skippaa"}
 PREVIOUS_COMMANDS = {"edellinen", "edellinen biisi", "edellinen kappale"}
 STATUS_COMMANDS = {
     "spotify",
+    "onko spotify paalla",
+    "mika spotify tila",
+    "mika on spotifyn tila",
     "mita soi",
     "mika soi",
     "mika kappale",
@@ -65,12 +90,17 @@ VOLUME_CONTEXT_WORDS = {"musiikki", "spotify", "volume", "volumea", "volyymi", "
 VOLUME_COMMAND_WORDS = {"laita", "pista", "pienenna", "pienen", "lisaa"}
 VOLUME_CONFIRMATION_YES = {"kylla", "joo", "juu", "ok", "okei", "ylla"}
 VOLUME_CONFIRMATION_NO = {"ei", "ala", "peruuta", "unohda"}
+SPOTIFY_NEAR_MATCH_THRESHOLD = CONFIRM_MATCH_THRESHOLD
+SPOTIFY_AUTO_MATCH_THRESHOLD = AUTO_MATCH_THRESHOLD
 UNCERTAIN_VOLUME_START_WORDS = {"laita", "pista"}
 _pending_volume_adjustment: int | None = None
+_pending_spotify_confirmation: str | None = None
 SPOTIFY_WORD_ALIASES = {
+    "potify": "spotify",
     "potifi": "spotify",
     "potifissa": "spotifyssa",
     "spotivy": "spotify",
+    "spotivyn": "spotifyn",
     "spotifai": "spotify",
     "spotifi": "spotify",
     "spotfy": "spotify",
@@ -116,7 +146,7 @@ GENRE_WORDS = {
 
 def handle_spotify_command(text: str) -> str | None:
     """Return a short local response for Spotify commands, or None if not matched."""
-    global _pending_volume_adjustment
+    global _pending_spotify_confirmation, _pending_volume_adjustment
 
     normalized = _normalize(text)
     words = normalized.split()
@@ -128,15 +158,25 @@ def handle_spotify_command(text: str) -> str | None:
     if _pending_volume_adjustment is not None and normalized in VOLUME_CONFIRMATION_NO:
         _pending_volume_adjustment = None
         return "Selvä, en tehnyt muutoksia."
+
+    if _pending_spotify_confirmation is not None and is_confirmation_yes(normalized):
+        command_kind = _pending_spotify_confirmation
+        _pending_spotify_confirmation = None
+        return _spotify_command_response(command_kind)
+    if _pending_spotify_confirmation is not None and is_confirmation_no(normalized):
+        _pending_spotify_confirmation = None
+        return "Selvä, en tehnyt muutoksia."
     if normalized in VOLUME_CONFIRMATION_YES:
         return None
 
     if normalized in STATUS_COMMANDS:
         return _currently_playing_response()
     if normalized in PLAY_COMMANDS:
-        return _play_response()
+        return _spotify_command_response("play")
+    if normalized in SHUTDOWN_COMMANDS:
+        return _spotify_command_response("shutdown")
     if normalized in PAUSE_COMMANDS:
-        return _run_spotify_action(spotify_client.pause, "Tauko.", ensure_output=False)
+        return _spotify_command_response("pause")
     if normalized in NEXT_COMMANDS:
         return _run_spotify_action(spotify_client.next_track, "Seuraava kappale.", ensure_output=False)
     if normalized in PREVIOUS_COMMANDS:
@@ -160,6 +200,14 @@ def handle_spotify_command(text: str) -> str | None:
         direction = "kovemmalle" if uncertain_adjustment > 0 else "hiljemmalle"
         return f"Tarkoititko laittaa musiikkia {direction}?"
 
+    near_spotify_command = _near_spotify_command(normalized)
+    if near_spotify_command is not None:
+        score, command_kind = near_spotify_command
+        if score >= SPOTIFY_AUTO_MATCH_THRESHOLD:
+            return _spotify_command_response(command_kind)
+        _pending_spotify_confirmation = command_kind
+        return _spotify_confirmation_question(command_kind)
+
     search_request = _search_play_request(words)
     if search_request is not None:
         query, types = search_request
@@ -167,8 +215,20 @@ def handle_spotify_command(text: str) -> str | None:
     return None
 
 
+def _spotify_command_response(command_kind: str) -> str:
+    if command_kind == "play":
+        return _play_response()
+    if command_kind == "shutdown":
+        return _shutdown_response()
+    if command_kind == "pause":
+        return _run_spotify_action(spotify_client.pause, "Tauko.", ensure_output=False)
+    if command_kind == "status":
+        return _currently_playing_response()
+    return None
+
+
 def _play_response() -> str:
-    return _run_spotify_action(_transfer_and_play, "Soitan Spotifystä.", ensure_output=True)
+    return _run_spotify_action(_transfer_and_play, "Soitan Spotifystä.", ensure_output=True, power_on_speakers=True)
 
 
 def _search_play_response(query: str, types: str) -> str:
@@ -176,7 +236,74 @@ def _search_play_response(query: str, types: str) -> str:
         lambda: _search_and_play(query, types),
         f"Soitan Spotifystä: {query}.",
         ensure_output=True,
+        power_on_speakers=True,
     )
+
+
+def _near_spotify_command(normalized: str) -> tuple[float, str] | None:
+    definitions = [
+        CommandDefinition("play", "soita spotify", _spotify_confirmation_question("play"), aliases=tuple(PLAY_COMMANDS)),
+        CommandDefinition("pause", "pysayta spotify", _spotify_confirmation_question("pause"), aliases=tuple(PAUSE_COMMANDS)),
+        CommandDefinition("shutdown", "sammuta spotify", _spotify_confirmation_question("shutdown"), aliases=tuple(SHUTDOWN_COMMANDS)),
+        CommandDefinition("status", "spotify status", _spotify_confirmation_question("status"), aliases=tuple(STATUS_COMMANDS)),
+    ]
+    match = match_command(
+        normalized,
+        definitions,
+        auto_threshold=SPOTIFY_AUTO_MATCH_THRESHOLD,
+        confirm_threshold=SPOTIFY_NEAR_MATCH_THRESHOLD,
+    )
+    if match is None:
+        return None
+    return match.confidence, match.definition.intent_id
+
+
+def _spotify_confirmation_question(command_kind: str) -> str:
+    if command_kind == "shutdown":
+        return "Tarkoititko sammuttaa Spotifyn?"
+    if command_kind == "pause":
+        return "Tarkoititko pysäyttää Spotifyn?"
+    if command_kind == "status":
+        return "Tarkoititko kysyä Spotifyn tilaa?"
+    return "Tarkoititko käynnistää Spotifyn?"
+
+
+def ensure_speakers_powered_on() -> None:
+    """Best-effort Hub wakeup for powered speaker playback."""
+    url = f"{SEESAM_HUB_BASE_URL.rstrip('/')}/speakers/power-on"
+    request = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=SPEAKER_POWER_ON_TIMEOUT_SECONDS):
+            pass
+    except Exception:
+        return
+    time.sleep(SPEAKER_POWER_ON_DELAY_SECONDS)
+
+
+def ensure_speakers_powered_off() -> None:
+    """Best-effort Hub shutdown for powered speakers."""
+    url = f"{SEESAM_HUB_BASE_URL.rstrip('/')}/speakers/power-off"
+    request = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=SPEAKER_POWER_ON_TIMEOUT_SECONDS):
+            pass
+    except Exception:
+        return
+
+
+def _shutdown_response() -> str:
+    return _run_spotify_action(_pause_and_power_off, "Sammutin Spotifyn.", ensure_output=False)
+
+
+def _pause_and_power_off() -> None:
+    try:
+        spotify_client.pause()
+    except SpotifyNoActiveDeviceError:
+        pass
+    try:
+        ensure_speakers_powered_off()
+    except Exception:
+        return
 
 
 def _search_and_play(query: str, types: str) -> None:
@@ -375,7 +502,15 @@ def _get_seesam_device_id() -> str:
     raise SpotifyNoActiveDeviceError(NO_ACTIVE_DEVICE_MESSAGE)
 
 
-def _run_spotify_action(action, success_message: str, ensure_output: bool = True) -> str:
+def _run_spotify_action(
+    action,
+    success_message: str,
+    ensure_output: bool = True,
+    power_on_speakers: bool = False,
+) -> str:
+    if power_on_speakers:
+        ensure_speakers_powered_on()
+
     if ensure_output:
         audio_result = ensure_default_media_output()
         if not audio_result.success:

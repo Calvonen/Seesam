@@ -65,6 +65,7 @@ ENERGYZEN_TANK_WORDS = (
     "varaajan",
     "varaajassa",
     "varraaja",
+    "varraajan",
     "varaaj",
     "raaja",
     "vesivaraaja",

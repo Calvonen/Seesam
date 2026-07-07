@@ -9,10 +9,16 @@ from audio.audio_manager import AudioResult, SPEAKERS_SLEEPING_MESSAGE
 
 
 @pytest.fixture(autouse=True)
-def reset_spotify_volume_pending():
+def reset_spotify_volume_pending(monkeypatch, request):
     from spotify import spotify_commands
 
     spotify_commands._pending_volume_adjustment = None
+    if request.node.name not in {
+        "test_ensure_speakers_powered_on_posts_to_hub_before_delay",
+        "test_ensure_speakers_powered_on_failure_does_not_sleep_or_raise",
+        "test_spotify_play_continues_when_speaker_power_on_fails",
+    }:
+        monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: None)
     yield
     spotify_commands._pending_volume_adjustment = None
 
@@ -65,14 +71,78 @@ def test_spotify_play_transfers_to_seesam_before_api_play(monkeypatch):
     monkeypatch.setattr(
         spotify_commands,
         "ensure_default_media_output",
-        lambda: AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
+        lambda: calls.append("media_output") or AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
     )
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
         spotify_commands.spotify_client,
         "transfer_playback",
         lambda device_id, play=False: calls.append(("transfer", device_id, play)),
     )
+    monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
+
+    assert spotify_commands.handle_spotify_command("soita spotify") == "Soitan Spotifystä."
+    assert calls == ["speaker_power_on", "media_output", ("transfer", "seesam-id", False), ("play", "seesam-id")]
+
+
+def test_ensure_speakers_powered_on_posts_to_hub_before_delay(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            calls.append("response_enter")
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            calls.append("response_exit")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_method(), request.data, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    spotify_commands.ensure_speakers_powered_on()
+
+    assert calls == [
+        ("http://192.168.68.74:8000/speakers/power-on", "POST", b"", 5),
+        "response_enter",
+        "response_exit",
+        ("sleep", 10),
+    ]
+
+
+def test_ensure_speakers_powered_on_failure_does_not_sleep_or_raise(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    def fail_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_method(), timeout))
+        raise OSError("hub unavailable")
+
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    spotify_commands.ensure_speakers_powered_on()
+
+    assert calls == [("http://192.168.68.74:8000/speakers/power-on", "POST", 5)]
+
+
+def test_spotify_play_continues_when_speaker_power_on_fails(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(OSError("hub unavailable")))
+    monkeypatch.setattr(spotify_commands.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: calls.append(("transfer", device_id, play)))
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
 
     assert spotify_commands.handle_spotify_command("soita spotify") == "Soitan Spotifystä."
@@ -84,16 +154,17 @@ def test_spotify_play_stops_when_media_output_fails(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(
         spotify_commands,
         "ensure_default_media_output",
-        lambda: AudioResult(False, SPEAKERS_SLEEPING_MESSAGE),
+        lambda: calls.append("media_output") or AudioResult(False, SPEAKERS_SLEEPING_MESSAGE),
     )
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: calls.append("devices"))
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append("play"))
 
     assert spotify_commands.handle_spotify_command("musiikki päälle") == "Kaiuttimet eivät vastaa. Herätä ne Bluetooth-tilaan."
-    assert calls == []
+    assert calls == ["speaker_power_on", "media_output"]
 
 
 def test_spotify_currently_playing_response(monkeypatch):
@@ -175,6 +246,11 @@ def test_spotify_volume_command_targets_seesam_device(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_on",
+        lambda: (_ for _ in ()).throw(AssertionError("volume command must not power on speakers")),
+    )
     monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
@@ -224,6 +300,11 @@ def test_spotify_pause_next_previous_and_status_intents(monkeypatch):
 
     calls = []
 
+    monkeypatch.setattr(
+        spotify_commands,
+        "ensure_speakers_powered_on",
+        lambda: (_ for _ in ()).throw(AssertionError("non-play command must not power on speakers")),
+    )
     monkeypatch.setattr(spotify_commands.spotify_client, "pause", lambda: calls.append("pause"))
     monkeypatch.setattr(spotify_commands.spotify_client, "next_track", lambda: calls.append("next"))
     monkeypatch.setattr(spotify_commands.spotify_client, "previous_track", lambda: calls.append("previous"))
@@ -551,6 +632,7 @@ def test_spotify_search_still_handles_genre_after_volume_phrases(monkeypatch):
     calls = []
 
     monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
     monkeypatch.setattr(
         spotify_commands.spotify_client,
@@ -562,7 +644,7 @@ def test_spotify_search_still_handles_genre_after_volume_phrases(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append((uri, device_id)))
 
     assert spotify_commands.handle_spotify_command("soita jazzia") == "Soitan Spotifystä: jazzia."
-    assert calls == [("jazzia", "playlist,track", 5), ("spotify:playlist:jazz", "seesam-id")]
+    assert calls == ["speaker_power_on", ("jazzia", "playlist,track", 5), ("spotify:playlist:jazz", "seesam-id")]
 
 
 def test_spotify_client_search_and_play_uri_use_web_api(monkeypatch):

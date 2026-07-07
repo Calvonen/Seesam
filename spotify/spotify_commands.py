@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import time
+import urllib.request
 from typing import Any
 
 from audio.audio_manager import SPEAKERS_SLEEPING_MESSAGE, ensure_default_media_output
@@ -17,6 +19,9 @@ from spotify.spotify_client import (
 )
 
 MEDIA_OUTPUT_FAILURE_MESSAGE = "Kaiuttimet eivät vastaa. Herätä ne Bluetooth-tilaan."
+SEESAM_HUB_BASE_URL = "http://192.168.68.74:8000"
+SPEAKER_POWER_ON_DELAY_SECONDS = 10
+SPEAKER_POWER_ON_TIMEOUT_SECONDS = 5
 SEESAM_DEVICE_NAME = "Seesam"
 PLAY_COMMANDS = {
     "laita spotify paalle",
@@ -168,7 +173,7 @@ def handle_spotify_command(text: str) -> str | None:
 
 
 def _play_response() -> str:
-    return _run_spotify_action(_transfer_and_play, "Soitan Spotifystä.", ensure_output=True)
+    return _run_spotify_action(_transfer_and_play, "Soitan Spotifystä.", ensure_output=True, power_on_speakers=True)
 
 
 def _search_play_response(query: str, types: str) -> str:
@@ -176,7 +181,20 @@ def _search_play_response(query: str, types: str) -> str:
         lambda: _search_and_play(query, types),
         f"Soitan Spotifystä: {query}.",
         ensure_output=True,
+        power_on_speakers=True,
     )
+
+
+def ensure_speakers_powered_on() -> None:
+    """Best-effort Hub wakeup for powered speaker playback."""
+    url = f"{SEESAM_HUB_BASE_URL.rstrip('/')}/speakers/power-on"
+    request = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=SPEAKER_POWER_ON_TIMEOUT_SECONDS):
+            pass
+    except Exception:
+        return
+    time.sleep(SPEAKER_POWER_ON_DELAY_SECONDS)
 
 
 def _search_and_play(query: str, types: str) -> None:
@@ -375,7 +393,15 @@ def _get_seesam_device_id() -> str:
     raise SpotifyNoActiveDeviceError(NO_ACTIVE_DEVICE_MESSAGE)
 
 
-def _run_spotify_action(action, success_message: str, ensure_output: bool = True) -> str:
+def _run_spotify_action(
+    action,
+    success_message: str,
+    ensure_output: bool = True,
+    power_on_speakers: bool = False,
+) -> str:
+    if power_on_speakers:
+        ensure_speakers_powered_on()
+
     if ensure_output:
         audio_result = ensure_default_media_output()
         if not audio_result.success:

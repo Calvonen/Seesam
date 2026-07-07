@@ -744,6 +744,111 @@ def test_existing_shelly_command_still_executes_exactly(monkeypatch, tmp_path):
     assert calls == [("192.0.2.10", 0)]
 
 
+
+
+def test_general_fuzzy_local_command_high_confidence_executes_without_ai(monkeypatch):
+    from core import commands
+    from audio import audio_manager
+
+    calls = []
+    commands._pending_local_confirmation = None
+    monkeypatch.setattr(
+        commands,
+        "ensure_media_output",
+        lambda device_id=None: calls.append(device_id) or audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
+    )
+    monkeypatch.setattr(commands, "handle_spotify_command", lambda text: None)
+
+    assert handle_local_command("kaiutimet paalle") == "Steljes-kaiuttimet yhdistetty."
+    assert calls == ["steljes_ns3"]
+    commands._pending_local_confirmation = None
+
+
+def test_general_fuzzy_local_command_medium_confidence_asks_confirmation(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 12.5,
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "gpu": {},
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert client.calls == []
+
+
+def test_general_fuzzy_pending_yes_executes_local_command(monkeypatch):
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_percent": 12.5,
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "ollama_status": "active",
+            "temperatures_c": {},
+            "gpu": {},
+        }
+
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert brain.respond("jes") == "Kone on kunnossa. Prosessorin kuorma on 12,5 prosenttia, muistia on käytössä 12,5 prosenttia ja levytilaa on vapaana 90 gigaa."
+    assert client.calls == []
+
+
+def test_general_fuzzy_pending_no_cancels_local_command(monkeypatch):
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("kone tila") == "Tarkoititko näyttää koneen tilan?"
+    assert brain.respond("en") == "Selvä, en tehnyt muutoksia."
+    assert client.calls == []
+
+
+def test_general_fuzzy_yes_without_pending_does_not_run_local_command():
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.handle_local_command("kyllä") is None
+
+
+def test_general_fuzzy_below_threshold_uses_ai_fallback():
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=SystemStatus(started_at=0))
+
+    assert brain.respond("xylophone foo") == "Vastaus 1"
+    assert len(client.calls) == 1
+
+
 def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(65) == "1 min"
     assert format_duration(3660) == "1 h 1 min"

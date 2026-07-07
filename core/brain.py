@@ -11,6 +11,7 @@ from pathlib import Path
 
 from core import energyzen, shelly
 from core.commands import handle_local_command
+from core.command_matcher import CommandDefinition, is_confirmation_no, is_confirmation_yes, match_command
 from core.config import PROJECT_ROOT, load_env_file
 from core.memory import AssistantIdentityMemory, EpisodeLog, Memory, UserProfileMemory
 from core.ollama_client import DEFAULT_HOST, DEFAULT_MODEL, OllamaClient, OllamaError
@@ -182,6 +183,12 @@ class PendingShellyConfirmation:
     created_at: float
 
 
+@dataclass
+class PendingLocalCommandConfirmation:
+    definition: CommandDefinition
+    created_at: float
+
+
 def build_client() -> OllamaClient:
     """Create an Ollama client from environment configuration."""
     return OllamaClient(
@@ -279,6 +286,7 @@ class Brain:
     conversation_history: list[tuple[str, str]] = field(default_factory=list)
     history_limit: int = CONVERSATION_HISTORY_LIMIT
     pending_shelly_confirmation: PendingShellyConfirmation | None = None
+    pending_local_command_confirmation: PendingLocalCommandConfirmation | None = None
 
     @classmethod
     def from_environment(cls) -> "Brain":
@@ -308,6 +316,10 @@ class Brain:
         self._log_event("user_message", user_input)
 
         pending_handled, pending_response = self._handle_pending_shelly_confirmation(user_input)
+        if pending_handled:
+            return pending_response
+
+        pending_handled, pending_response = self._handle_pending_local_command_confirmation(user_input)
         if pending_handled:
             return pending_response
 
@@ -354,6 +366,10 @@ class Brain:
         memory_list_response = self._handle_memory_list_command(user_input)
         if memory_list_response is not None:
             return memory_list_response
+
+        near_local_response = self._handle_near_local_command(user_input)
+        if near_local_response is not None:
+            return near_local_response
 
         return None
 
@@ -440,6 +456,76 @@ class Brain:
         if self._handle_system_status_command(user_input) is not None:
             return "system_status"
         return "none"
+
+    def _handle_pending_local_command_confirmation(self, user_input: str) -> tuple[bool, str | None]:
+        pending = self.pending_local_command_confirmation
+        if pending is None:
+            return False, None
+
+        age_seconds = time.monotonic() - pending.created_at
+        if age_seconds > SHELLY_CONFIRMATION_TTL_SECONDS:
+            self.pending_local_command_confirmation = None
+            if is_confirmation_yes(user_input) or is_confirmation_no(user_input):
+                return True, "Varmistus vanheni, en tehnyt muutoksia."
+            return False, None
+
+        if is_confirmation_yes(user_input):
+            self.pending_local_command_confirmation = None
+            return True, pending.definition.handler() if pending.definition.handler is not None else None
+        if is_confirmation_no(user_input):
+            self.pending_local_command_confirmation = None
+            return True, "Selvä, en tehnyt muutoksia."
+
+        self.pending_local_command_confirmation = None
+        return False, None
+
+
+    def _handle_near_local_command(self, user_input: str) -> str | None:
+        match = match_command(user_input, self._local_command_definitions())
+        if match is None:
+            return None
+        if match.needs_confirmation:
+            self.pending_local_command_confirmation = PendingLocalCommandConfirmation(match.definition, time.monotonic())
+            return match.definition.confirmation_question
+        return match.definition.handler() if match.definition.handler is not None else None
+
+
+    def _local_command_definitions(self) -> tuple[CommandDefinition, ...]:
+        return (
+            CommandDefinition(
+                "system_status",
+                "koneen tila",
+                "Tarkoititko näyttää koneen tilan?",
+                handler=lambda: self._handle_system_status_command("koneen tila"),
+                aliases=(
+                    "koneen tiedot",
+                    "tietokoneen tila",
+                    "jarjestelman tila",
+                    "järjestelmän tila",
+                    "mika on koneen tila",
+                    "mikä on koneen tila",
+                    "nayta koneen tiedot",
+                    "näytä koneen tiedot",
+                ),
+            ),
+            CommandDefinition(
+                "energyzen",
+                "paljonko varaajan lampo on",
+                "Tarkoititko kysyä varaajan tilaa?",
+                handler=lambda: self._handle_energyzen_command("paljonko varaajan lämpö on"),
+                aliases=(
+                    "mika on lamminvesivaraajan tila",
+                    "mikä on lämminvesivaraajan tila",
+                    "nayta varaajan lampotilat",
+                    "näytä varaajan lämpötilat",
+                    "paljonko suihkuja on jaljella",
+                    "paljonko suihkuja on jäljellä",
+                    "paljonko varaajassa on lamminta",
+                    "paljonko varaajassa on lämmintä",
+                ),
+            ),
+        )
+
 
     def _handle_pending_shelly_confirmation(self, user_input: str) -> tuple[bool, str | None]:
         pending = self.pending_shelly_confirmation

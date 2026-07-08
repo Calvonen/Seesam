@@ -36,6 +36,13 @@ class TranscribeResponse(BaseModel):
     text: str
 
 
+class ListenStartResponse(BaseModel):
+    """Outgoing listen start acknowledgement payload."""
+
+    ok: bool
+    action: str
+
+
 def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
@@ -122,6 +129,11 @@ def create_app(
             await file.close()
 
         return TranscribeResponse(text=text)
+
+    @app.post("/listen/start", response_model=ListenStartResponse)
+    def listen_start() -> ListenStartResponse:
+        """Acknowledge a request to start listening without blocking the request."""
+        return ListenStartResponse(ok=True, action="listen_start_requested")
 
     return app
 

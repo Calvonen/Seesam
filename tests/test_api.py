@@ -84,6 +84,18 @@ def test_health_returns_ok_with_local_system_fields():
     }
 
 
+def test_listen_start_returns_acknowledgement():
+    client = TestClient(create_app(brain=FakeBrain()))
+
+    response = client.post("/listen/start")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "action": "listen_start_requested",
+    }
+
+
 def test_status_returns_server_status():
     client = TestClient(
         create_app(brain=FakeBrain(), status_collector=FakeStatusCollector())

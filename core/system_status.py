@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - exercised when optional dependency is 
     psutil = None
 
 from core.config import PROJECT_ROOT
+from core import tts
 
 GB = 1024**3
 VERSION = "local-file-memory-v1"
@@ -30,6 +31,13 @@ RAM_WORDS = {"ram", "muisti", "keskusmuisti"}
 DISK_WORDS = {"levy", "levytila", "levytilaa", "disk"}
 OLLAMA_WORDS = {"ollama"}
 MACHINE_CONTEXT_WORDS = {"kone", "koneessa", "serveri", "serverin", "palvelin", "palvelimen"}
+TIME_DETAIL_PHRASES = {
+    "paljonko tarkalleen",
+    "minuutilleen",
+    "tarkka aika",
+    "tarkemmin",
+}
+
 FOLLOWUP_DETAIL_STATUS_PHRASES = {
     "kerro tarkemmin",
     "kerro tarkat tiedot",
@@ -346,6 +354,7 @@ class SystemStatus:
     version: str = VERSION
     lastSystemInfoTopic: str | None = None
     lastSystemInfoRawText: str | None = None
+    lastApproximateTime: datetime | None = None
 
     @classmethod
     def started_now(cls) -> "SystemStatus":
@@ -412,6 +421,8 @@ class SystemStatus:
         words = words_in(normalized)
         if normalized in DATE_PHRASES:
             return "time"
+        if normalized in TIME_DETAIL_PHRASES and self.lastApproximateTime is not None:
+            return "time_details"
         if has_any(words, TIME_WORDS):
             return "time"
         if normalized in ALL_DETAIL_STATUS_PHRASES:
@@ -447,7 +458,7 @@ class SystemStatus:
     def debug_match_name(self, user_input: str) -> str:
         """Return status debug category for API logging."""
         match_kind = self.match_kind(user_input)
-        if match_kind in {"time", "cpu", "gpu", "ram", "disk", "ollama", "details", "all_details"}:
+        if match_kind in {"time", "time_details", "cpu", "gpu", "ram", "disk", "ollama", "details", "all_details"}:
             return match_kind
         return "none"
 
@@ -459,7 +470,16 @@ class SystemStatus:
             now = datetime.now().astimezone()
             if normalized in DATE_PHRASES:
                 return f"Tänään on {now:%d.%m.%Y}."
-            return f"Kello on {now:%H:%M:%S}."
+            if tts.is_approximate_finnish_time(now.minute):
+                self.lastApproximateTime = now
+            else:
+                self.lastApproximateTime = None
+            return f"Kello on {tts._spoken_finnish_time(now.hour, now.minute)}."
+
+        if match_kind == "time_details" and self.lastApproximateTime is not None:
+            previous = self.lastApproximateTime
+            self.lastApproximateTime = None
+            return f"Kello on {tts._spoken_finnish_time(previous.hour, previous.minute, precise=True)}."
 
         if match_kind == "details":
             return self.lastSystemInfoRawText or format_detailed_status(self.collect())

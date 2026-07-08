@@ -29,6 +29,30 @@ TEXT_EMOTICON_PATTERN = re.compile(
     r"(?<!\w)(?:[:;=8xX][-oO']?[)(DPp/\\]|[)(][-oO']?[:;=8xX]|<3)(?!\w)"
 )
 EMOJI_PATTERN = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\uFE0F]+")
+TIME_PATTERN = re.compile(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b")
+
+FI_NUMBERS = {
+    0: "nolla",
+    1: "yksi",
+    2: "kaksi",
+    3: "kolme",
+    4: "neljä",
+    5: "viisi",
+    6: "kuusi",
+    7: "seitsemän",
+    8: "kahdeksan",
+    9: "yhdeksän",
+    10: "kymmenen",
+    11: "yksitoista",
+    12: "kaksitoista",
+    13: "kolmetoista",
+    14: "neljätoista",
+    15: "viisitoista",
+    16: "kuusitoista",
+    17: "seitsemäntoista",
+    18: "kahdeksantoista",
+    19: "yhdeksäntoista",
+}
 
 
 def sanitize_text_for_tts(text: str) -> str:
@@ -43,12 +67,78 @@ def clean_text_for_speech(text: str) -> str:
     return sanitize_text_for_tts(text)
 
 
+def _fi_number(n: int) -> str:
+    """Return a small Finnish cardinal number for spoken time."""
+    if n in FI_NUMBERS:
+        return FI_NUMBERS[n]
+    if 20 <= n <= 59:
+        tens = (n // 10) * 10
+        ones = n % 10
+        tens_word = {
+            20: "kaksikymmentä",
+            30: "kolmekymmentä",
+            40: "neljäkymmentä",
+            50: "viisikymmentä",
+        }[tens]
+        return tens_word if ones == 0 else f"{tens_word} {FI_NUMBERS[ones]}"
+    return str(n)
+
+
+def _spoken_hour(hour: int) -> str:
+    return _fi_number(hour % 24)
+
+
+def _spoken_finnish_time(hour: int, minute: int, precise: bool = False) -> str:
+    """Return natural Finnish speech for a clock time without seconds."""
+    hour %= 24
+    minute = max(0, min(59, minute))
+    next_hour = (hour + 1) % 24
+
+    if precise:
+        if minute == 0:
+            return _spoken_hour(hour)
+        return f"{_spoken_hour(hour)} {_fi_number(minute)}"
+
+    if minute == 0:
+        return _spoken_hour(hour)
+    if 1 <= minute <= 7:
+        return f"vähän yli {_spoken_hour(hour)}"
+    if 13 <= minute <= 17:
+        return f"varttia yli {_spoken_hour(hour)}"
+    if 28 <= minute <= 32:
+        return f"puoli {_spoken_hour(next_hour)}"
+    if 43 <= minute <= 47:
+        return f"varttia vaille {_spoken_hour(next_hour)}"
+    if 53 <= minute <= 59:
+        return f"kohta {_spoken_hour(next_hour)}"
+    return f"{_spoken_hour(hour)} {_fi_number(minute)}"
+
+
+def is_approximate_finnish_time(minute: int) -> bool:
+    """Return whether normal Finnish time speech rounds the minute range."""
+    return 1 <= minute <= 7 or 13 <= minute <= 17 or 28 <= minute <= 32 or 43 <= minute <= 47 or 53 <= minute <= 59
+
+
+def normalize_times_for_tts(text: str, precise: bool = False) -> str:
+    """Convert digital clock times to Finnish spoken form."""
+
+    def replace_time(match: re.Match[str]) -> str:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if hour > 23 or minute > 59:
+            return match.group(0)
+        return _spoken_finnish_time(hour, minute, precise=precise)
+
+    return TIME_PATTERN.sub(replace_time, text)
+
+
 def normalize_for_speech(text: str) -> str:
     """Return text normalized for Finnish text-to-speech only."""
     spoken = sanitize_text_for_tts(text)
     if not spoken:
         return ""
 
+    spoken = normalize_times_for_tts(spoken)
     spoken = spoken.replace("Intel(R)", "Intel").replace("Core(TM)", "Core")
     spoken = re.sub(
         r"(\d+(?:\.\d+)?)\s*GiB\s*/\s*(\d+(?:\.\d+)?)\s*GiB",

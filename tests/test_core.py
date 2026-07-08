@@ -936,6 +936,23 @@ def test_system_status_keyword_matcher_recognizes_natural_time_phrases():
         assert status.debug_match_name(phrase) == "time"
 
 
+def test_time_detail_followup_returns_previous_exact_time(monkeypatch):
+    from datetime import datetime as real_datetime
+
+    import core.system_status as system_status
+
+    class FixedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 8, 8, 13, 42)
+
+    monkeypatch.setattr(system_status, "datetime", FixedDateTime)
+    for followup in ["tarkemmin", "paljonko tarkalleen", "minuutilleen", "tarkka aika"]:
+        status = SystemStatus(started_at=0)
+        assert status.answer("paljonko kello on") == "Kello on varttia yli kahdeksan."
+        assert status.answer(followup) == "Kello on kahdeksan kolmetoista."
+
+
 def test_system_status_keyword_matcher_recognizes_machine_parts_without_memory_confusion():
     status = SystemStatus(started_at=0)
 
@@ -1901,6 +1918,18 @@ def test_normalize_for_speech_converts_technical_units_and_marks():
         tts.normalize_for_speech("230 V, 10 A, 500 mA, 2 kW, 3 Wh, 4 kWh, 1200 RPM")
         == "230 volttia, 10 ampeeria, 500 milliampeeria, 2 kilowattia, 3 wattituntia, 4 kilowattituntia, 1200 kierrosta minuutissa"
     )
+
+
+def test_normalize_times_for_tts_speaks_finnish_time_without_seconds():
+    from core import tts
+
+    assert "varttia yli kahdeksan" in tts.normalize_times_for_tts("Kello on 8:13")
+    normalized = tts.normalize_times_for_tts("Kello on 8:15:42")
+    assert "varttia yli kahdeksan" in normalized
+    assert "42" not in normalized
+    assert "kahdeksan kolmetoista" in tts.normalize_times_for_tts("Kello on 8:13", precise=True)
+    assert "puoli yhdeksän" in tts.normalize_times_for_tts("Kello on 8:30")
+    assert "varttia vaille yhdeksän" in tts.normalize_times_for_tts("Kello on 8:45")
 
 
 def test_tts_disabled_does_not_call_subprocess(monkeypatch):

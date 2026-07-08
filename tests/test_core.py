@@ -11,6 +11,7 @@ from core.brain import (
     MEMORY_PATH,
     USER_PROFILE_PATH,
     _normalize_command_text,
+    is_wake_word_only,
     initialize_local_memory_files,
     load_personality,
 )
@@ -46,6 +47,89 @@ def test_normalize_command_text_fixes_conservative_voice_errors():
     assert _normalize_command_text("Aita krillikatoksen valot päälle.") == "laita krillikatoksen valot paalle"
     assert _normalize_command_text("Laita krillikatoksen malot päälle.") == "laita krillikatoksen valot paalle"
     assert _normalize_command_text("Sytytä krillikatoksen valot.") == "sytyta krillikatoksen valot"
+
+
+def test_is_wake_word_only_matches_bare_wake_variants():
+    for phrase in [
+        "seesam",
+        "Seesam",
+        "seesam?",
+        "hei seesam",
+        "hei seesam?",
+        "seesami",
+        "sesam",
+        "seisem",
+        "Seisemmin.",
+        "seism",
+        "seismä",
+        "hei seism",
+        "hei seisem",
+        "hei seisemmin",
+    ]:
+        assert is_wake_word_only(phrase) is True
+
+    assert is_wake_word_only("seesam paljonko kello on") is False
+    assert is_wake_word_only("seism paljonko kello on") is False
+    assert is_wake_word_only("seesam mikä päivä tänään on") is False
+    assert is_wake_word_only("tämä ei ole seismä") is False
+
+
+def test_wake_word_only_acknowledges_with_kerro_without_ollama():
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi")
+
+    for phrase in [
+        "seesam",
+        "Seesam",
+        "seesam?",
+        "hei seesam",
+        "hei seesam?",
+        "seesami",
+        "sesam",
+        "seisem",
+        "Seisemmin.",
+        "seism",
+        "seismä",
+        "hei seism",
+        "hei seisem",
+        "hei seisemmin",
+    ]:
+        assert brain.respond(phrase) == "Kerro."
+
+    assert client.calls == []
+
+
+def test_wake_word_prefix_keeps_command_routing_without_kerro():
+    class FakeWakeSystemStatus:
+        def __init__(self):
+            self.messages = []
+
+        def answer(self, message):
+            self.messages.append(message)
+            return {
+                "paljonko kello on": "Kello on varttia yli kahdeksan.",
+                "mikä päivä tänään on": "Tänään on keskiviikko kahdeksas heinäkuuta.",
+                "koneen tila": "Kone on kunnossa.",
+            }.get(message)
+
+    status = FakeWakeSystemStatus()
+    client = FakeOllamaClient()
+    brain = Brain(client=client, personality="vastaa suomeksi", system_status=status)
+
+    responses = [
+        brain.respond("seism paljonko kello on"),
+        brain.respond("seisem mikä päivä tänään on"),
+        brain.respond("seesami koneen tila"),
+    ]
+
+    assert responses == [
+        "Kello on varttia yli kahdeksan.",
+        "Tänään on keskiviikko kahdeksas heinäkuuta.",
+        "Kone on kunnossa.",
+    ]
+    assert "Kerro." not in responses
+    assert status.messages == ["paljonko kello on", "mikä päivä tänään on", "koneen tila"]
+    assert client.calls == []
 
 
 def test_wake_command_returns_local_response_without_ollama():
@@ -920,6 +1004,74 @@ def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(65) == "1 min"
     assert format_duration(3660) == "1 h 1 min"
     assert format_duration(90000) == "1 pv 1 h"
+
+
+def test_system_status_answers_bare_wake_word_with_kerro():
+    status = SystemStatus(started_at=0)
+
+    for phrase in [
+        "seesam",
+        "Seesam",
+        "seesam?",
+        "hei seesam",
+        "hei seesam?",
+        "seesami",
+        "sesam",
+        "seisem",
+        "Seisemmin.",
+        "seism",
+        "seismä",
+        "hei seism",
+        "hei seisem",
+        "hei seisemmin",
+    ]:
+        assert status.answer(phrase) == "Kerro."
+
+    assert status.answer("tämä ei ole seismä") is None
+
+
+def test_system_status_strips_wake_word_prefix_for_supported_commands(monkeypatch):
+    from datetime import datetime as real_datetime
+
+    import core.system_status as system_status
+
+    class FixedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 8, 8, 13, 42)
+
+    def fake_collect(self):
+        return {
+            "hostname": "seesam",
+            "uptime": "1 h",
+            "cpu_model": "AMD Test",
+            "cpu_cores_physical": 8,
+            "cpu_threads": 16,
+            "cpu_percent": 12.5,
+            "ram_used_gb": 4.0,
+            "ram_total_gb": 32.0,
+            "ram_free_gb": 28.0,
+            "ram_percent": 12.5,
+            "disk_used_gb": 10.0,
+            "disk_total_gb": 100.0,
+            "disk_free_gb": 90.0,
+            "disk_percent": 10.0,
+            "temperatures_c": {},
+            "memory_file_status": "ok",
+            "ollama_status": "active",
+            "version": "test",
+        }
+
+    monkeypatch.setattr(system_status, "datetime", FixedDateTime)
+    monkeypatch.setattr(SystemStatus, "collect", fake_collect)
+    status = SystemStatus(started_at=0)
+
+    assert status.answer("seism paljonko kello on") == "Kello on varttia yli kahdeksan."
+    assert status.answer("seisem mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    status_answer = status.answer("seesami koneen tila")
+    assert status_answer is not None
+    assert status_answer != "Kerro."
+    assert status_answer.startswith("Kone on kunnossa.")
 
 
 def test_system_status_keyword_matcher_recognizes_natural_time_phrases():

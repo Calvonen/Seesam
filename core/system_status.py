@@ -24,7 +24,14 @@ from core import tts
 GB = 1024**3
 VERSION = "local-file-memory-v1"
 TIME_WORDS = {"aika", "kello", "kellonaika"}
-DATE_PHRASES = {"mikä päivä tänään on", "mikä päivä tanaan on"}
+DATE_PHRASES = {
+    "mikä päivä tänään on",
+    "mikä päivä tanaan on",
+    "päivämäärä",
+    "paivamaara",
+    "mikä päivämäärä",
+    "mika paivamaara",
+}
 CPU_WORDS = {"cpu", "prosessori", "suoritin"}
 GPU_WORDS = {"gpu", "näytönohjain", "naytonohjain", "grafiikkakortti", "näyttis", "nayttis"}
 RAM_WORDS = {"ram", "muisti", "keskusmuisti"}
@@ -469,7 +476,7 @@ class SystemStatus:
         if match_kind == "time":
             now = datetime.now().astimezone()
             if normalized in DATE_PHRASES:
-                return f"Tänään on {now:%d.%m.%Y}."
+                return f"Tänään on {tts.spoken_finnish_date(now)}."
             if tts.is_approximate_finnish_time(now.minute):
                 self.lastApproximateTime = now
             else:

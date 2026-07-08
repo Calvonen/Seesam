@@ -54,6 +54,55 @@ FI_NUMBERS = {
     19: "yhdeksäntoista",
 }
 
+FI_WEEKDAYS = (
+    "maanantai",
+    "tiistai",
+    "keskiviikko",
+    "torstai",
+    "perjantai",
+    "lauantai",
+    "sunnuntai",
+)
+
+FI_MONTHS_PARTITIVE = (
+    "tammikuuta",
+    "helmikuuta",
+    "maaliskuuta",
+    "huhtikuuta",
+    "toukokuuta",
+    "kesäkuuta",
+    "heinäkuuta",
+    "elokuuta",
+    "syyskuuta",
+    "lokakuuta",
+    "marraskuuta",
+    "joulukuuta",
+)
+
+FI_ORDINAL_DAYS = {
+    1: "ensimmäinen",
+    2: "toinen",
+    3: "kolmas",
+    4: "neljäs",
+    5: "viides",
+    6: "kuudes",
+    7: "seitsemäs",
+    8: "kahdeksas",
+    9: "yhdeksäs",
+    10: "kymmenes",
+    11: "yhdestoista",
+    12: "kahdestoista",
+    13: "kolmastoista",
+    14: "neljästoista",
+    15: "viidestoista",
+    16: "kuudestoista",
+    17: "seitsemästoista",
+    18: "kahdeksastoista",
+    19: "yhdeksästoista",
+    20: "kahdeskymmenes",
+    30: "kolmaskymmenes",
+}
+
 
 def sanitize_text_for_tts(text: str) -> str:
     """Remove emoji and text emoticons from text sent to TTS only."""
@@ -65,6 +114,36 @@ def sanitize_text_for_tts(text: str) -> str:
 def clean_text_for_speech(text: str) -> str:
     """Remove characters that should not be spoken by TTS."""
     return sanitize_text_for_tts(text)
+
+
+def _fi_weekday_name(weekday: int) -> str:
+    """Return Finnish weekday name for date.weekday() values."""
+    if 0 <= weekday < len(FI_WEEKDAYS):
+        return FI_WEEKDAYS[weekday]
+    return str(weekday)
+
+
+def _fi_month_partitive(month: int) -> str:
+    """Return Finnish month name used in spoken dates."""
+    if 1 <= month <= len(FI_MONTHS_PARTITIVE):
+        return FI_MONTHS_PARTITIVE[month - 1]
+    return str(month)
+
+
+def _fi_ordinal_day(day: int) -> str:
+    """Return Finnish ordinal day for spoken dates."""
+    if day in FI_ORDINAL_DAYS:
+        return FI_ORDINAL_DAYS[day]
+    if 21 <= day <= 29:
+        return f"{FI_ORDINAL_DAYS[20]} {FI_ORDINAL_DAYS[day - 20]}"
+    if day == 31:
+        return f"{FI_ORDINAL_DAYS[30]} {FI_ORDINAL_DAYS[1]}"
+    return str(day)
+
+
+def spoken_finnish_date(date_obj) -> str:
+    """Return natural Finnish date speech with weekday, day, and month."""
+    return f"{_fi_weekday_name(date_obj.weekday())} {_fi_ordinal_day(date_obj.day)} {_fi_month_partitive(date_obj.month)}"
 
 
 def _fi_number(n: int) -> str:

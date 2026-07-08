@@ -936,6 +936,33 @@ def test_system_status_keyword_matcher_recognizes_natural_time_phrases():
         assert status.debug_match_name(phrase) == "time"
 
 
+def test_system_status_date_answer_uses_natural_finnish_date(monkeypatch):
+    from datetime import datetime as real_datetime
+
+    import core.system_status as system_status
+
+    class FixedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 8, 8, 13, 42)
+
+    monkeypatch.setattr(system_status, "datetime", FixedDateTime)
+    status = SystemStatus(started_at=0)
+
+    assert status.answer("mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    assert status.answer("päivämäärä") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    assert status.answer("mikä päivämäärä") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+
+
+def test_spoken_finnish_date_handles_first_and_twenty_first_days():
+    from datetime import date
+
+    from core import tts
+
+    assert tts.spoken_finnish_date(date(2026, 1, 1)) == "torstai ensimmäinen tammikuuta"
+    assert tts.spoken_finnish_date(date(2026, 1, 21)) == "keskiviikko kahdeskymmenes ensimmäinen tammikuuta"
+
+
 def test_time_detail_followup_returns_previous_exact_time(monkeypatch):
     from datetime import datetime as real_datetime
 

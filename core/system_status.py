@@ -81,8 +81,8 @@ MEMORY_LOCAL_PATHS = (
     PROJECT_ROOT / "memory" / "memories.local.txt",
     PROJECT_ROOT / "memory" / "episodes.local.log",
 )
-WAKE_WORD_VARIANTS = {"seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seismä"}
-WAKE_WORD_PATTERN = re.compile(r"(?i)^\s*(?:hei\s+)?(?:seesam|seesami|sesam|seisem|seisemmin|seism|seismä)(?=$|[\s?.!,])[\s?.!,]*")
+WAKE_WORD_VARIANTS = {"osmo", "seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seismä"}
+WAKE_WORD_PATTERN = re.compile(r"(?i)^\s*(?:hei\s+)?(?:osmo|seesam|seesami|sesam|seisem|seisemmin|seism|seismä)(?=$|[\s?.!,])[\s?.!,]*")
 
 
 def normalize_user_text(text: str) -> str:

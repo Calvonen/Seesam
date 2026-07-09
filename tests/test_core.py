@@ -51,6 +51,10 @@ def test_normalize_command_text_fixes_conservative_voice_errors():
 
 def test_is_wake_word_only_matches_bare_wake_variants():
     for phrase in [
+        "osmo",
+        "Osmo",
+        "osmo?",
+        "hei osmo",
         "seesam",
         "Seesam",
         "seesam?",
@@ -68,6 +72,8 @@ def test_is_wake_word_only_matches_bare_wake_variants():
     ]:
         assert is_wake_word_only(phrase) is True
 
+    assert is_wake_word_only("osmo paljonko kello on") is False
+    assert is_wake_word_only("osmoa") is False
     assert is_wake_word_only("seesam paljonko kello on") is False
     assert is_wake_word_only("seism paljonko kello on") is False
     assert is_wake_word_only("seesam mikä päivä tänään on") is False
@@ -79,6 +85,10 @@ def test_wake_word_only_acknowledges_with_kerro_without_ollama():
     brain = Brain(client=client, personality="vastaa suomeksi")
 
     for phrase in [
+        "osmo",
+        "Osmo",
+        "osmo?",
+        "hei osmo",
         "seesam",
         "Seesam",
         "seesam?",
@@ -117,18 +127,25 @@ def test_wake_word_prefix_keeps_command_routing_without_kerro():
     brain = Brain(client=client, personality="vastaa suomeksi", system_status=status)
 
     responses = [
-        brain.respond("seism paljonko kello on"),
-        brain.respond("seisem mikä päivä tänään on"),
-        brain.respond("seesami koneen tila"),
+        brain.respond("osmo paljonko kello on"),
+        brain.respond("osmo mikä päivä tänään on"),
+        brain.respond("osmo koneen tila"),
+        brain.respond("seesam paljonko kello on"),
     ]
 
     assert responses == [
         "Kello on varttia yli kahdeksan.",
         "Tänään on keskiviikko kahdeksas heinäkuuta.",
         "Kone on kunnossa.",
+        "Kello on varttia yli kahdeksan.",
     ]
     assert "Kerro." not in responses
-    assert status.messages == ["paljonko kello on", "mikä päivä tänään on", "koneen tila"]
+    assert status.messages == [
+        "paljonko kello on",
+        "mikä päivä tänään on",
+        "koneen tila",
+        "paljonko kello on",
+    ]
     assert client.calls == []
 
 
@@ -1010,6 +1027,10 @@ def test_system_status_answers_bare_wake_word_with_kerro():
     status = SystemStatus(started_at=0)
 
     for phrase in [
+        "osmo",
+        "Osmo",
+        "osmo?",
+        "hei osmo",
         "seesam",
         "Seesam",
         "seesam?",
@@ -1066,9 +1087,10 @@ def test_system_status_strips_wake_word_prefix_for_supported_commands(monkeypatc
     monkeypatch.setattr(SystemStatus, "collect", fake_collect)
     status = SystemStatus(started_at=0)
 
-    assert status.answer("seism paljonko kello on") == "Kello on varttia yli kahdeksan."
-    assert status.answer("seisem mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
-    status_answer = status.answer("seesami koneen tila")
+    assert status.answer("osmo paljonko kello on") == "Kello on varttia yli kahdeksan."
+    assert status.answer("osmo mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    assert status.answer("seesam paljonko kello on") == "Kello on varttia yli kahdeksan."
+    status_answer = status.answer("osmo koneen tila")
     assert status_answer is not None
     assert status_answer != "Kerro."
     assert status_answer.startswith("Kone on kunnossa.")

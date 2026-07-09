@@ -146,13 +146,14 @@ def test_wake_word_prefix_keeps_command_routing_without_kerro():
 
     assert responses == [
         "Kello on varttia yli kahdeksan.",
-        "Kello on varttia yli kahdeksan.",
+        "Moi. Kello on varttia yli kahdeksan.",
         "Tänään on keskiviikko kahdeksas heinäkuuta.",
-        "Kone on kunnossa.",
+        "Hei. Kone on kunnossa.",
         "Kello on varttia yli kahdeksan.",
     ]
     assert "Kerro, miten voin auttaa." not in responses
     assert "Hei, kerro miten voin auttaa." not in responses
+    assert "Hei. Kerro, miten voin auttaa." not in responses
     assert status.messages == [
         "paljonko kello on",
         "paljonko kello on",
@@ -169,7 +170,7 @@ def test_wake_command_returns_local_response_without_ollama():
 
     answer = brain.respond("Hei seesam aukene nyt")
 
-    assert answer == "Kuuntelen."
+    assert answer == "Hei. Kuuntelen."
     assert client.calls == []
 
 
@@ -1106,15 +1107,18 @@ def test_system_status_strips_wake_word_prefix_for_supported_commands(monkeypatc
     monkeypatch.setattr(SystemStatus, "collect", fake_collect)
     status = SystemStatus(started_at=0)
 
-    assert status.answer("osmo paljonko kello on") == "Kello on varttia yli kahdeksan."
-    assert status.answer("moi osmo paljonko kello on") == "Kello on varttia yli kahdeksan."
+    assert status.answer("moi, mitä kello on").startswith("Moi. Kello on")
+    assert status.answer("hei mitä kello on").startswith("Hei. Kello on")
+    assert status.answer("osmo paljonko kello on").startswith("Kello on")
+    assert status.answer("moi osmo paljonko kello on").startswith("Moi. Kello on")
     assert status.answer("osmo mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    assert status.answer("hei osmo mikä päivä tänään on").startswith("Hei. Tänään on")
     assert status.answer("seesam paljonko kello on") == "Kello on varttia yli kahdeksan."
-    status_answer = status.answer("hei osmo koneen tila")
+    status_answer = status.answer("huomenta osmo koneen tila")
     assert status_answer is not None
     assert status_answer != "Kerro, miten voin auttaa."
-    assert status_answer != "Hei, kerro miten voin auttaa."
-    assert status_answer.startswith("Kone on kunnossa.")
+    assert status_answer != "Huomenta, kerro miten voin auttaa."
+    assert status_answer.startswith("Huomenta. Kone on kunnossa.")
 
 
 def test_system_status_keyword_matcher_recognizes_natural_time_phrases():

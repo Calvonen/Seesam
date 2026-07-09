@@ -113,6 +113,16 @@ def wake_word_acknowledgement(text: str) -> str | None:
     return None
 
 
+def extract_leading_greeting(text: str) -> tuple[str | None, str]:
+    """Return a leading greeting display word and text without that greeting."""
+    greeting_pattern = "|".join(re.escape(greeting) for greeting in sorted(WAKE_GREETING_RESPONSES, key=len, reverse=True))
+    match = re.match(rf"(?i)^\s*({greeting_pattern})(?=$|[\s,?.!])[\s,?.!]*", text)
+    if match is None:
+        return None, text.strip()
+    greeting = WAKE_GREETING_RESPONSES[match.group(1).casefold()]
+    return greeting, text[match.end():].strip()
+
+
 def is_wake_word_only(text: str) -> bool:
     """Return whether input is only Seesam's wake word or a common STT variant."""
     return wake_word_acknowledgement(text) is not None
@@ -460,7 +470,8 @@ class SystemStatus:
         """Return the local status category matched from natural speech."""
         if is_wake_word_only(user_input):
             return "wake"
-        normalized = normalize_user_text(strip_wake_word_prefix(user_input))
+        _, command_text = extract_leading_greeting(user_input)
+        normalized = normalize_user_text(strip_wake_word_prefix(command_text))
         words = words_in(normalized)
         if normalized in DATE_PHRASES:
             return "time"
@@ -507,52 +518,59 @@ class SystemStatus:
 
     def answer(self, user_input: str) -> str | None:
         """Return a Finnish local answer for supported system-status questions."""
-        normalized = normalize_user_text(strip_wake_word_prefix(user_input))
+        greeting, command_text = extract_leading_greeting(user_input)
+        normalized = normalize_user_text(strip_wake_word_prefix(command_text))
         match_kind = self.match_kind(user_input)
+
+        def with_greeting(answer: str | None) -> str | None:
+            if greeting is not None and answer is not None:
+                return f"{greeting}. {answer}"
+            return answer
+
         if match_kind == "wake":
             return wake_word_acknowledgement(user_input)
         if match_kind == "time":
             now = datetime.now().astimezone()
             if normalized in DATE_PHRASES:
-                return f"Tänään on {tts.spoken_finnish_date(now)}."
+                return with_greeting(f"Tänään on {tts.spoken_finnish_date(now)}.")
             if tts.is_approximate_finnish_time(now.minute):
                 self.lastApproximateTime = now
             else:
                 self.lastApproximateTime = None
-            return f"Kello on {tts._spoken_finnish_time(now.hour, now.minute)}."
+            return with_greeting(f"Kello on {tts._spoken_finnish_time(now.hour, now.minute)}.")
 
         if match_kind == "time_details" and self.lastApproximateTime is not None:
             previous = self.lastApproximateTime
             self.lastApproximateTime = None
-            return f"Kello on {tts._spoken_finnish_time(previous.hour, previous.minute, precise=True)}."
+            return with_greeting(f"Kello on {tts._spoken_finnish_time(previous.hour, previous.minute, precise=True)}.")
 
         if match_kind == "details":
-            return self.lastSystemInfoRawText or format_detailed_status(self.collect())
+            return with_greeting(self.lastSystemInfoRawText or format_detailed_status(self.collect()))
 
         data = self.collect() if match_kind is not None else None
         if match_kind == "all_details":
             raw = format_detailed_status(data)
             self._remember_system_info("all", raw)
-            return raw
+            return with_greeting(raw)
         if match_kind == "cpu":
             self._remember_system_info("cpu", format_cpu(data))
-            return format_cpu_speech(data)
+            return with_greeting(format_cpu_speech(data))
         if match_kind == "gpu":
             raw = format_gpu(data)
             self._remember_system_info("gpu", raw)
-            return format_gpu_speech(data)
+            return with_greeting(format_gpu_speech(data))
         if match_kind == "ram":
             self._remember_system_info("ram", format_memory(data))
-            return format_memory_speech(data)
+            return with_greeting(format_memory_speech(data))
         if match_kind == "disk":
             self._remember_system_info("disk", format_disk(data))
-            return format_disk_speech(data)
+            return with_greeting(format_disk_speech(data))
         if match_kind == "ollama":
-            return format_ollama(data)
+            return with_greeting(format_ollama(data))
         if match_kind == "status":
             raw = format_detailed_status(data)
             self._remember_system_info("all", raw)
-            return format_machine_status_speech(data)
+            return with_greeting(format_machine_status_speech(data))
         return None
 
     def _remember_system_info(self, topic: str, raw_text: str) -> None:

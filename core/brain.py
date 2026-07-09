@@ -117,6 +117,16 @@ def wake_word_acknowledgement(text: str) -> str | None:
     return None
 
 
+def extract_leading_greeting(text: str) -> tuple[str | None, str]:
+    """Return a leading greeting display word and text without that greeting."""
+    greeting_pattern = "|".join(re.escape(greeting) for greeting in sorted(WAKE_GREETING_RESPONSES, key=len, reverse=True))
+    match = re.match(rf"(?i)^\s*({greeting_pattern})(?=$|[\s,?.!])[\s,?.!]*", text)
+    if match is None:
+        return None, text.strip()
+    greeting = WAKE_GREETING_RESPONSES[match.group(1).casefold()]
+    return greeting, text[match.end():].strip()
+
+
 def is_wake_word_only(text: str) -> bool:
     """Return whether input is only Seesam's wake word or a common STT variant."""
     return wake_word_acknowledgement(text) is not None
@@ -357,63 +367,69 @@ class Brain:
         acknowledgement = wake_word_acknowledgement(user_input)
         if acknowledgement is not None:
             return acknowledgement
-        command_input = _strip_wake_word_prefix(user_input)
+        greeting, routed_input = extract_leading_greeting(user_input)
+        command_input = _strip_wake_word_prefix(routed_input)
+
+        def with_greeting(response: str | None) -> str | None:
+            if greeting is not None and response is not None:
+                return f"{greeting}. {response}"
+            return response
 
         pending_handled, pending_response = self._handle_pending_shelly_confirmation(command_input)
         if pending_handled:
-            return pending_response
+            return with_greeting(pending_response)
 
         pending_handled, pending_response = self._handle_pending_local_command_confirmation(command_input)
         if pending_handled:
-            return pending_response
+            return with_greeting(pending_response)
 
         system_status_response = self._handle_system_status_command(command_input)
         if system_status_response is not None:
-            return system_status_response
+            return with_greeting(system_status_response)
 
         energyzen_response = self._handle_energyzen_command(command_input)
         if energyzen_response is not None:
-            return energyzen_response
+            return with_greeting(energyzen_response)
 
         shelly_response = self._handle_shelly_command(command_input)
         if shelly_response is not None:
-            return shelly_response
+            return with_greeting(shelly_response)
 
         assistant_identity_response = self._handle_assistant_identity_question(command_input)
         if assistant_identity_response is not None:
-            return assistant_identity_response
+            return with_greeting(assistant_identity_response)
 
         local_response = handle_local_command(command_input)
         if local_response is not None:
-            return local_response
+            return with_greeting(local_response)
 
         memory_response = self._handle_memory_command(command_input)
         if memory_response is not None:
-            return memory_response
+            return with_greeting(memory_response)
 
         deep_memory_response = self._handle_deep_memory_command(command_input)
         if deep_memory_response is not None:
-            return deep_memory_response
+            return with_greeting(deep_memory_response)
 
         latest_memory_response = self._handle_latest_memory_command(command_input)
         if latest_memory_response is not None:
-            return latest_memory_response
+            return with_greeting(latest_memory_response)
 
         latest_memory_list_response = self._handle_latest_memory_list_command(command_input)
         if latest_memory_list_response is not None:
-            return latest_memory_list_response
+            return with_greeting(latest_memory_list_response)
 
         memory_delete_response = self._handle_memory_delete_command(command_input)
         if memory_delete_response is not None:
-            return memory_delete_response
+            return with_greeting(memory_delete_response)
 
         memory_list_response = self._handle_memory_list_command(command_input)
         if memory_list_response is not None:
-            return memory_list_response
+            return with_greeting(memory_list_response)
 
         near_local_response = self._handle_near_local_command(command_input)
         if near_local_response is not None:
-            return near_local_response
+            return with_greeting(near_local_response)
 
         return None
 

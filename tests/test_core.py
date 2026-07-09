@@ -55,6 +55,10 @@ def test_is_wake_word_only_matches_bare_wake_variants():
         "Osmo",
         "osmo?",
         "hei osmo",
+        "moi osmo",
+        "terve osmo",
+        "huomenta osmo",
+        "iltaa osmo",
         "seesam",
         "Seesam",
         "seesam?",
@@ -73,6 +77,7 @@ def test_is_wake_word_only_matches_bare_wake_variants():
         assert is_wake_word_only(phrase) is True
 
     assert is_wake_word_only("osmo paljonko kello on") is False
+    assert is_wake_word_only("moi osmo paljonko kello on") is False
     assert is_wake_word_only("osmoa") is False
     assert is_wake_word_only("seesam paljonko kello on") is False
     assert is_wake_word_only("seism paljonko kello on") is False
@@ -80,7 +85,7 @@ def test_is_wake_word_only_matches_bare_wake_variants():
     assert is_wake_word_only("tämä ei ole seismä") is False
 
 
-def test_wake_word_only_acknowledges_with_kerro_without_ollama():
+def test_wake_word_only_acknowledges_with_clear_prompt_without_ollama():
     client = FakeOllamaClient()
     brain = Brain(client=client, personality="vastaa suomeksi")
 
@@ -88,23 +93,28 @@ def test_wake_word_only_acknowledges_with_kerro_without_ollama():
         "osmo",
         "Osmo",
         "osmo?",
-        "hei osmo",
         "seesam",
         "Seesam",
         "seesam?",
-        "hei seesam",
-        "hei seesam?",
         "seesami",
         "sesam",
         "seisem",
         "Seisemmin.",
         "seism",
         "seismä",
-        "hei seism",
-        "hei seisem",
-        "hei seisemmin",
     ]:
-        assert brain.respond(phrase) == "Kerro."
+        assert brain.respond(phrase) == "Kerro, miten voin auttaa."
+
+    greeting_cases = {
+        "moi osmo": "Moi, kerro miten voin auttaa.",
+        "hei osmo": "Hei, kerro miten voin auttaa.",
+        "terve osmo": "Terve, kerro miten voin auttaa.",
+        "huomenta osmo": "Huomenta, kerro miten voin auttaa.",
+        "iltaa osmo": "Iltaa, kerro miten voin auttaa.",
+        "hei seesam": "Hei, kerro miten voin auttaa.",
+    }
+    for phrase, expected in greeting_cases.items():
+        assert brain.respond(phrase) == expected
 
     assert client.calls == []
 
@@ -128,19 +138,23 @@ def test_wake_word_prefix_keeps_command_routing_without_kerro():
 
     responses = [
         brain.respond("osmo paljonko kello on"),
+        brain.respond("moi osmo paljonko kello on"),
         brain.respond("osmo mikä päivä tänään on"),
-        brain.respond("osmo koneen tila"),
+        brain.respond("hei osmo koneen tila"),
         brain.respond("seesam paljonko kello on"),
     ]
 
     assert responses == [
         "Kello on varttia yli kahdeksan.",
+        "Kello on varttia yli kahdeksan.",
         "Tänään on keskiviikko kahdeksas heinäkuuta.",
         "Kone on kunnossa.",
         "Kello on varttia yli kahdeksan.",
     ]
-    assert "Kerro." not in responses
+    assert "Kerro, miten voin auttaa." not in responses
+    assert "Hei, kerro miten voin auttaa." not in responses
     assert status.messages == [
+        "paljonko kello on",
         "paljonko kello on",
         "mikä päivä tänään on",
         "koneen tila",
@@ -1023,30 +1037,35 @@ def test_format_duration_returns_compact_finnish_uptime():
     assert format_duration(90000) == "1 pv 1 h"
 
 
-def test_system_status_answers_bare_wake_word_with_kerro():
+def test_system_status_answers_bare_wake_word_with_clear_prompt():
     status = SystemStatus(started_at=0)
 
     for phrase in [
         "osmo",
         "Osmo",
         "osmo?",
-        "hei osmo",
         "seesam",
         "Seesam",
         "seesam?",
-        "hei seesam",
-        "hei seesam?",
         "seesami",
         "sesam",
         "seisem",
         "Seisemmin.",
         "seism",
         "seismä",
-        "hei seism",
-        "hei seisem",
-        "hei seisemmin",
     ]:
-        assert status.answer(phrase) == "Kerro."
+        assert status.answer(phrase) == "Kerro, miten voin auttaa."
+
+    greeting_cases = {
+        "moi osmo": "Moi, kerro miten voin auttaa.",
+        "hei osmo": "Hei, kerro miten voin auttaa.",
+        "terve osmo": "Terve, kerro miten voin auttaa.",
+        "huomenta osmo": "Huomenta, kerro miten voin auttaa.",
+        "iltaa osmo": "Iltaa, kerro miten voin auttaa.",
+        "hei seesam": "Hei, kerro miten voin auttaa.",
+    }
+    for phrase, expected in greeting_cases.items():
+        assert status.answer(phrase) == expected
 
     assert status.answer("tämä ei ole seismä") is None
 
@@ -1088,11 +1107,13 @@ def test_system_status_strips_wake_word_prefix_for_supported_commands(monkeypatc
     status = SystemStatus(started_at=0)
 
     assert status.answer("osmo paljonko kello on") == "Kello on varttia yli kahdeksan."
+    assert status.answer("moi osmo paljonko kello on") == "Kello on varttia yli kahdeksan."
     assert status.answer("osmo mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
     assert status.answer("seesam paljonko kello on") == "Kello on varttia yli kahdeksan."
-    status_answer = status.answer("osmo koneen tila")
+    status_answer = status.answer("hei osmo koneen tila")
     assert status_answer is not None
-    assert status_answer != "Kerro."
+    assert status_answer != "Kerro, miten voin auttaa."
+    assert status_answer != "Hei, kerro miten voin auttaa."
     assert status_answer.startswith("Kone on kunnossa.")
 
 

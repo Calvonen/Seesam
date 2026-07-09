@@ -82,7 +82,17 @@ MEMORY_LOCAL_PATHS = (
     PROJECT_ROOT / "memory" / "episodes.local.log",
 )
 WAKE_WORD_VARIANTS = {"osmo", "seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seismä"}
-WAKE_WORD_PATTERN = re.compile(r"(?i)^\s*(?:hei\s+)?(?:osmo|seesam|seesami|sesam|seisem|seisemmin|seism|seismä)(?=$|[\s?.!,])[\s?.!,]*")
+WAKE_GREETING_RESPONSES = {
+    "moi": "Moi",
+    "hei": "Hei",
+    "terve": "Terve",
+    "huomenta": "Huomenta",
+    "iltaa": "Iltaa",
+}
+WAKE_WORD_ACKNOWLEDGEMENT = "Kerro, miten voin auttaa."
+WAKE_WORD_PATTERN = re.compile(
+    r"(?i)^\s*(?:(?:moi|hei|terve|huomenta|iltaa)\s+)?(?:osmo|seesam|seesami|sesam|seisem|seisemmin|seism|seismä)(?=$|[\s?.!,])[\s?.!,]*"
+)
 
 
 def normalize_user_text(text: str) -> str:
@@ -92,13 +102,20 @@ def normalize_user_text(text: str) -> str:
     return " ".join(without_punctuation.strip().split())
 
 
+def wake_word_acknowledgement(text: str) -> str | None:
+    """Return the wake-only acknowledgement, preserving a leading greeting."""
+    words = normalize_user_text(text).split()
+    if len(words) == 1 and words[0] in WAKE_WORD_VARIANTS:
+        return WAKE_WORD_ACKNOWLEDGEMENT
+    if len(words) == 2 and words[0] in WAKE_GREETING_RESPONSES and words[1] in WAKE_WORD_VARIANTS:
+        greeting = WAKE_GREETING_RESPONSES[words[0]]
+        return f"{greeting}, kerro miten voin auttaa."
+    return None
+
+
 def is_wake_word_only(text: str) -> bool:
     """Return whether input is only Seesam's wake word or a common STT variant."""
-    normalized = normalize_user_text(text)
-    words = normalized.split()
-    if words and words[0] == "hei":
-        words = words[1:]
-    return len(words) == 1 and words[0] in WAKE_WORD_VARIANTS
+    return wake_word_acknowledgement(text) is not None
 
 
 def strip_wake_word_prefix(text: str) -> str:
@@ -493,7 +510,7 @@ class SystemStatus:
         normalized = normalize_user_text(strip_wake_word_prefix(user_input))
         match_kind = self.match_kind(user_input)
         if match_kind == "wake":
-            return "Kerro."
+            return wake_word_acknowledgement(user_input)
         if match_kind == "time":
             now = datetime.now().astimezone()
             if normalized in DATE_PHRASES:

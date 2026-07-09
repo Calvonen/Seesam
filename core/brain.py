@@ -82,6 +82,14 @@ ENERGYZEN_TANK_PHRASE_PATTERNS = (
 ENERGYZEN_HEAT_WORDS = ("lampo", "lamminta", "suihku","lämmin",)
 ENERGYZEN_SHOWER_PHRASES = ("lammita suihku", "suihkuja")
 WAKE_WORD_VARIANTS = {"osmo", "seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seisma"}
+WAKE_GREETING_RESPONSES = {
+    "moi": "Moi",
+    "hei": "Hei",
+    "terve": "Terve",
+    "huomenta": "Huomenta",
+    "iltaa": "Iltaa",
+}
+WAKE_WORD_ACKNOWLEDGEMENT = "Kerro, miten voin auttaa."
 
 
 def load_personality(path: Path = PERSONALITY_PATH) -> str:
@@ -98,13 +106,20 @@ def _normalize_command_text(text: str) -> str:
     return _normalize_voice_command_errors(lowered)
 
 
+def wake_word_acknowledgement(text: str) -> str | None:
+    """Return the wake-only acknowledgement, preserving a leading greeting."""
+    words = _normalize_command_text(text).split()
+    if len(words) == 1 and words[0] in WAKE_WORD_VARIANTS:
+        return WAKE_WORD_ACKNOWLEDGEMENT
+    if len(words) == 2 and words[0] in WAKE_GREETING_RESPONSES and words[1] in WAKE_WORD_VARIANTS:
+        greeting = WAKE_GREETING_RESPONSES[words[0]]
+        return f"{greeting}, kerro miten voin auttaa."
+    return None
+
+
 def is_wake_word_only(text: str) -> bool:
     """Return whether input is only Seesam's wake word or a common STT variant."""
-    normalized = _normalize_command_text(text)
-    words = normalized.split()
-    if words and words[0] == "hei":
-        words = words[1:]
-    return len(words) == 1 and words[0] in WAKE_WORD_VARIANTS
+    return wake_word_acknowledgement(text) is not None
 
 
 def _strip_wake_word_prefix(text: str) -> str:
@@ -113,8 +128,13 @@ def _strip_wake_word_prefix(text: str) -> str:
     normalized = _normalize_command_text(stripped)
     if normalized.startswith("seesam aukene") or normalized.startswith("hei seesam aukene"):
         return stripped
+    greeting_pattern = "|".join(re.escape(greeting) for greeting in sorted(WAKE_GREETING_RESPONSES, key=len, reverse=True))
     wake_pattern = "|".join(re.escape(variant) for variant in sorted(WAKE_WORD_VARIANTS, key=len, reverse=True))
-    return re.sub(rf"(?i)^\s*(?:hei\s+)?(?:{wake_pattern})(?=$|[\s?.!,])[\s?.!,]*", "", stripped).strip() or stripped
+    return re.sub(
+        rf"(?i)^\s*(?:(?:{greeting_pattern})\s+)?(?:{wake_pattern})(?=$|[\s?.!,])[\s?.!,]*",
+        "",
+        stripped,
+    ).strip() or stripped
 
 
 def _normalize_voice_command_errors(text: str) -> str:
@@ -334,8 +354,9 @@ class Brain:
     def handle_local_command(self, user_input: str) -> str | None:
         """Return a local command response, or None when AI should handle it."""
         self._log_event("user_message", user_input)
-        if is_wake_word_only(user_input):
-            return "Kerro."
+        acknowledgement = wake_word_acknowledgement(user_input)
+        if acknowledgement is not None:
+            return acknowledgement
         command_input = _strip_wake_word_prefix(user_input)
 
         pending_handled, pending_response = self._handle_pending_shelly_confirmation(command_input)

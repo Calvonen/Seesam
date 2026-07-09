@@ -164,7 +164,9 @@ def _fi_number(n: int) -> str:
 
 
 def _spoken_hour(hour: int) -> str:
-    return _fi_number(hour % 24)
+    hour %= 24
+    natural_hour = 12 if hour == 0 else hour if hour <= 12 else hour - 12
+    return _fi_number(natural_hour)
 
 
 def _spoken_finnish_time(hour: int, minute: int, precise: bool = False) -> str:

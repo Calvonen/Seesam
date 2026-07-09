@@ -1145,13 +1145,13 @@ def test_time_detail_followup_returns_previous_exact_time(monkeypatch):
     class FixedDateTime(real_datetime):
         @classmethod
         def now(cls, tz=None):
-            return cls(2026, 7, 8, 8, 13, 42)
+            return cls(2026, 7, 8, 16, 13, 42)
 
     monkeypatch.setattr(system_status, "datetime", FixedDateTime)
     for followup in ["tarkemmin", "paljonko tarkalleen", "minuutilleen", "tarkka aika"]:
         status = SystemStatus(started_at=0)
-        assert status.answer("paljonko kello on") == "Kello on varttia yli kahdeksan."
-        assert status.answer(followup) == "Kello on kahdeksan kolmetoista."
+        assert status.answer("paljonko kello on") == "Kello on varttia yli neljä."
+        assert status.answer(followup) == "Kello on neljä kolmetoista."
 
 
 def test_system_status_keyword_matcher_recognizes_machine_parts_without_memory_confusion():
@@ -2125,12 +2125,17 @@ def test_normalize_times_for_tts_speaks_finnish_time_without_seconds():
     from core import tts
 
     assert "varttia yli kahdeksan" in tts.normalize_times_for_tts("Kello on 8:13")
-    normalized = tts.normalize_times_for_tts("Kello on 8:15:42")
-    assert "varttia yli kahdeksan" in normalized
+    assert "varttia yli neljä" in tts.normalize_times_for_tts("Kello on 16:13")
+    normalized = tts.normalize_times_for_tts("Kello on 16:15:42")
+    assert "varttia yli neljä" in normalized
     assert "42" not in normalized
+    assert "neljä kolmetoista" in tts.normalize_times_for_tts("Kello on 16:13", precise=True)
     assert "kahdeksan kolmetoista" in tts.normalize_times_for_tts("Kello on 8:13", precise=True)
     assert "puoli yhdeksän" in tts.normalize_times_for_tts("Kello on 8:30")
+    assert "puoli yhdeksän" in tts.normalize_times_for_tts("Kello on 20:30")
     assert "varttia vaille yhdeksän" in tts.normalize_times_for_tts("Kello on 8:45")
+    assert "varttia vaille kaksitoista" in tts.normalize_times_for_tts("Kello on 23:45")
+    assert "varttia yli kaksitoista" in tts.normalize_times_for_tts("Kello on 00:15")
 
 
 def test_tts_disabled_does_not_call_subprocess(monkeypatch):

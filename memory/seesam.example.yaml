@@ -1,7 +1,5 @@
-name: Seesam
+name: Osmo
 aliases:
-  - seesami
-  - CSAM
 role: paikallinen ääniavustaja
 language: fi
 server: Seesam-palvelin

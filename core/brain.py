@@ -81,7 +81,7 @@ ENERGYZEN_TANK_PHRASE_PATTERNS = (
 )
 ENERGYZEN_HEAT_WORDS = ("lampo", "lamminta", "suihku","lämmin",)
 ENERGYZEN_SHOWER_PHRASES = ("lammita suihku", "suihkuja")
-WAKE_WORD_VARIANTS = {"seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seisma"}
+WAKE_WORD_VARIANTS = {"osmo", "seesam", "seesami", "sesam", "seisem", "seisemmin", "seism", "seisma"}
 
 
 def load_personality(path: Path = PERSONALITY_PATH) -> str:
@@ -113,7 +113,7 @@ def _strip_wake_word_prefix(text: str) -> str:
     normalized = _normalize_command_text(stripped)
     if normalized.startswith("seesam aukene") or normalized.startswith("hei seesam aukene"):
         return stripped
-    wake_pattern = "|".join(sorted(WAKE_WORD_VARIANTS, key=len, reverse=True))
+    wake_pattern = "|".join(re.escape(variant) for variant in sorted(WAKE_WORD_VARIANTS, key=len, reverse=True))
     return re.sub(rf"(?i)^\s*(?:hei\s+)?(?:{wake_pattern})(?=$|[\s?.!,])[\s?.!,]*", "", stripped).strip() or stripped
 
 

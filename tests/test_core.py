@@ -197,7 +197,7 @@ def test_audio_devices_config_separates_voice_and_media_outputs():
     assert config["voice_output"] == {"mode": "api"}
     assert config["media_output"] == {"default": "steljes_ns3"}
     assert config["devices"]["steljes_ns3"]["name"] == "Steljes audio NS3"
-    assert config["devices"]["steljes_ns3"]["volume"] == 0.8
+    assert config["devices"]["steljes_ns3"]["volume"] == 0.6
 
 
 def test_ensure_default_media_output_uses_media_output_default(monkeypatch, tmp_path):
@@ -565,9 +565,10 @@ def test_audio_output_local_commands_call_audio_manager(monkeypatch):
     calls = []
 
     def fake_ensure_media_output(device_id=None):
-        calls.append(device_id)
+        calls.append(("media_output", device_id))
         return audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty.")
 
+    monkeypatch.setattr(commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(commands, "ensure_media_output", fake_ensure_media_output)
     monkeypatch.setattr(
         commands,
@@ -575,17 +576,64 @@ def test_audio_output_local_commands_call_audio_manager(monkeypatch):
         lambda text: "steljes_ns3" if any(alias in text for alias in {"kaiuttimet", "steljes", "olohuone"}) else None,
     )
 
-    assert handle_local_command("yhdistä kaiuttimet") == "Steljes-kaiuttimet yhdistetty."
-    assert handle_local_command("steljes päälle") == "Steljes-kaiuttimet yhdistetty."
-    assert handle_local_command("media päälle") == "Steljes-kaiuttimet yhdistetty."
+    assert handle_local_command("yhdistä kaiuttimet") == "Kaiuttimet kytketty."
+    assert handle_local_command("steljes päälle") == "Kaiuttimet kytketty."
+    assert handle_local_command("media päälle") == "Kaiuttimet kytketty."
     assert handle_local_command("olohuone päälle") == "Steljes-kaiuttimet yhdistetty."
-    assert calls == ["steljes_ns3", "steljes_ns3", "steljes_ns3", "steljes_ns3"]
+    assert calls == [
+        "speaker_power_on",
+        ("media_output", "steljes_ns3"),
+        "speaker_power_on",
+        ("media_output", "steljes_ns3"),
+        "speaker_power_on",
+        ("media_output", "steljes_ns3"),
+        ("media_output", "steljes_ns3"),
+    ]
+
+
+def test_speaker_power_phrases_are_handled_before_spotify(monkeypatch):
+    from audio import audio_manager
+    from core import commands
+
+    calls = []
+    spotify_calls = []
+    monkeypatch.setattr(commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
+    monkeypatch.setattr(
+        commands,
+        "ensure_media_output",
+        lambda device_id=None: calls.append(("media_output", device_id))
+        or audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
+    )
+    monkeypatch.setattr(
+        commands,
+        "handle_spotify_command",
+        lambda text: spotify_calls.append(text) or "Soitan Spotifystä: virheellinen haku.",
+    )
+
+    phrases = (
+        "laita kaiuttimet päälle",
+        "laita kaijuttimet päälle",
+        "kaiuttimet päälle",
+        "kaijuttimet päälle",
+        "kytke kaiuttimet",
+        "yhdistä kaiuttimet",
+        "yhdistä bluetooth kaiuttimet",
+        "laita kajarit päälle",
+        "laita ämyrit päälle",
+        "laita amyrit paalle",
+    )
+    for phrase in phrases:
+        assert handle_local_command(phrase) == "Kaiuttimet kytketty."
+
+    assert calls == ["speaker_power_on", ("media_output", "steljes_ns3")] * len(phrases)
+    assert spotify_calls == []
 
 
 def test_audio_output_local_command_returns_audio_manager_failure_message(monkeypatch):
     from audio import audio_manager
     from core import commands
 
+    monkeypatch.setattr(commands, "ensure_speakers_powered_on", lambda: None)
     monkeypatch.setattr(
         commands,
         "ensure_media_output",
@@ -868,6 +916,7 @@ def test_general_fuzzy_local_command_high_confidence_executes_without_ai(monkeyp
 
     calls = []
     commands._pending_local_confirmation = None
+    monkeypatch.setattr(commands, "ensure_speakers_powered_on", lambda: calls.append("speaker_power_on"))
     monkeypatch.setattr(
         commands,
         "ensure_media_output",
@@ -875,8 +924,8 @@ def test_general_fuzzy_local_command_high_confidence_executes_without_ai(monkeyp
     )
     monkeypatch.setattr(commands, "handle_spotify_command", lambda text: None)
 
-    assert handle_local_command("kaiutimet paalle") == "Steljes-kaiuttimet yhdistetty."
-    assert calls == ["steljes_ns3"]
+    assert handle_local_command("kaiutimet paalle") == "Kaiuttimet kytketty."
+    assert calls == ["speaker_power_on", "steljes_ns3"]
     commands._pending_local_confirmation = None
 
 

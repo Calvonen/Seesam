@@ -213,13 +213,14 @@ def test_core_keeps_audio_output_commands(monkeypatch):
     from core import commands
 
     monkeypatch.setattr(commands, "handle_spotify_command", lambda text: None)
+    monkeypatch.setattr(commands, "ensure_speakers_powered_on", lambda: None)
     monkeypatch.setattr(
         commands,
         "ensure_media_output",
         lambda device_id=None: audio_manager.AudioResult(True, "Steljes-kaiuttimet yhdistetty."),
     )
 
-    assert commands.handle_local_command("kaiuttimet päälle") == "Steljes-kaiuttimet yhdistetty."
+    assert commands.handle_local_command("kaiuttimet päälle") == "Kaiuttimet kytketty."
 
 
 def test_spotify_play_does_not_require_seesam_to_be_active(monkeypatch):

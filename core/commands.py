@@ -6,19 +6,24 @@ import re
 
 from audio.audio_manager import ensure_media_output, find_device_id_for_text
 from core.command_matcher import CommandDefinition, is_confirmation_no, is_confirmation_yes, match_command
-from spotify.spotify_commands import handle_spotify_command
+from spotify.spotify_commands import ensure_speakers_powered_on, handle_spotify_command
 
 WAKE_COMMAND = "seesam aukene"
 WAKE_RESPONSE = "Kuuntelen."
 AUDIO_OUTPUT_COMMAND_PHRASES = {
+    "laita kaiuttimet paalle",
     "kaiuttimet paalle",
-    "kaiuttimet päälle",
+    "laita kaijuttimet paalle",
+    "kaijuttimet paalle",
+    "laita kajarit paalle",
+    "kajarit paalle",
+    "laita amyrit paalle",
+    "amyrit paalle",
+    "kytke kaiuttimet",
     "yhdista kaiuttimet",
-    "yhdistä kaiuttimet",
+    "yhdista bluetooth kaiuttimet",
     "steljes paalle",
-    "steljes päälle",
     "media paalle",
-    "media päälle",
 }
 MEDIA_PLAYBACK_COMMAND_PHRASES = {
     "soita spotify",
@@ -52,10 +57,6 @@ def handle_local_command(user_input: str) -> str | None:
     if WAKE_COMMAND in user_input.casefold():
         return WAKE_RESPONSE
 
-    spotify_response = handle_spotify_command(user_input)
-    if spotify_response is not None:
-        return spotify_response
-
     normalized_audio_phrases = {_normalize_command(phrase) for phrase in AUDIO_OUTPUT_COMMAND_PHRASES}
     if normalized in normalized_audio_phrases:
         return _ensure_default_audio_output()
@@ -64,6 +65,10 @@ def handle_local_command(user_input: str) -> str | None:
     if alias_device_id is not None and ("paalle" in normalized.split() or "yhdista" in normalized.split()):
         result = ensure_media_output(alias_device_id)
         return result.message
+
+    spotify_response = handle_spotify_command(user_input)
+    if spotify_response is not None:
+        return spotify_response
 
     near_command = match_command(user_input, _local_command_definitions())
     if near_command is not None:
@@ -76,8 +81,9 @@ def handle_local_command(user_input: str) -> str | None:
 
 
 def _ensure_default_audio_output() -> str:
+    ensure_speakers_powered_on()
     result = ensure_media_output("steljes_ns3")
-    return result.message
+    return "Kaiuttimet kytketty." if result.success else result.message
 
 
 def _local_command_definitions() -> tuple[CommandDefinition, ...]:

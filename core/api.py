@@ -49,6 +49,7 @@ class ListenStatusResponse(BaseModel):
     processing: bool
     last_transcript: str | None
     last_answer: str | None
+    audio_ready: bool
 
 
 def create_app(
@@ -70,7 +71,7 @@ def create_app(
             app.state.brain = Brain.from_environment()
         return app.state.brain
 
-    app.state.listen_session = listen_session or ListenSession(get_brain, stt.transcribe_audio, tts.speak)
+    app.state.listen_session = listen_session or ListenSession(get_brain, stt.transcribe_audio, tts.synthesize_wav)
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -153,6 +154,13 @@ def create_app(
     @app.get("/listen/status", response_model=ListenStatusResponse)
     def listen_status() -> ListenStatusResponse:
         return ListenStatusResponse(**app.state.listen_session.status())
+
+    @app.get("/listen/last-audio")
+    def listen_last_audio() -> Response:
+        audio = app.state.listen_session.get_last_audio()
+        if audio is None:
+            raise HTTPException(status_code=404, detail="No listen response audio is available.")
+        return Response(content=audio, media_type="audio/wav")
 
     return app
 

@@ -10,14 +10,15 @@ class BrainLike(Protocol):
     def respond(self, text: str) -> str: ...
 
 class ListenSession:
-    def __init__(self, brain_getter: Callable[[], BrainLike], transcribe: Callable[[bytes, str | None], str], speak: Callable[[str], None], popen: Callable[..., subprocess.Popen] = subprocess.Popen) -> None:
-        self._brain_getter, self._transcribe, self._speak, self._popen = brain_getter, transcribe, speak, popen
+    def __init__(self, brain_getter: Callable[[], BrainLike], transcribe: Callable[[bytes, str | None], str], synthesize_wav: Callable[[str], bytes], popen: Callable[..., subprocess.Popen] = subprocess.Popen) -> None:
+        self._brain_getter, self._transcribe, self._synthesize_wav, self._popen = brain_getter, transcribe, synthesize_wav, popen
         self._lock = threading.Lock()
         self._process: subprocess.Popen | None = None
         self._audio_path: Path | None = None
         self._processing = False
         self._last_transcript: str | None = None
         self._last_answer: str | None = None
+        self._last_audio: bytes | None = None
 
     def start(self) -> str:
         with self._lock:
@@ -31,6 +32,7 @@ class ListenSession:
                 audio_path.unlink(missing_ok=True)
                 raise
             self._process, self._audio_path = process, audio_path
+            self._last_audio = None
             return "listening_started"
 
     def stop(self) -> str:
@@ -44,7 +46,11 @@ class ListenSession:
 
     def status(self) -> dict[str, object]:
         with self._lock:
-            return {"listening": self._process is not None, "processing": self._processing, "last_transcript": self._last_transcript, "last_answer": self._last_answer}
+            return {"listening": self._process is not None, "processing": self._processing, "last_transcript": self._last_transcript, "last_answer": self._last_answer, "audio_ready": self._last_audio is not None}
+
+    def get_last_audio(self) -> bytes | None:
+        with self._lock:
+            return self._last_audio
 
     def _finish_recording(self, process: subprocess.Popen, audio_path: Path) -> None:
         try:
@@ -58,7 +64,9 @@ class ListenSession:
             answer = self._brain_getter().respond(transcript)
             with self._lock:
                 self._last_transcript, self._last_answer = transcript, answer
-            self._speak(answer)
+            audio = self._synthesize_wav(answer)
+            with self._lock:
+                self._last_audio = audio
         finally:
             audio_path.unlink(missing_ok=True)
             with self._lock:

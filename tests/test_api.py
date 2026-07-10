@@ -89,7 +89,7 @@ def test_health_returns_ok_with_local_system_fields():
 
 
 def make_listen_session():
-    calls = {"transcribe": [], "brain": [], "speak": []}
+    calls = {"transcribe": [], "brain": [], "synthesize_wav": []}
 
     class FakeProcess:
         def __init__(self, command, **kwargs):
@@ -115,7 +115,11 @@ def make_listen_session():
         calls["transcribe"].append((audio, filename))
         return "kysymys"
 
-    session = ListenSession(lambda: ListenBrain(), transcribe, calls["speak"].append, FakeProcess)
+    def synthesize_wav(text):
+        calls["synthesize_wav"].append(text)
+        return b"RIFF response wav"
+
+    session = ListenSession(lambda: ListenBrain(), transcribe, synthesize_wav, FakeProcess)
     return session, calls
 
 
@@ -135,6 +139,15 @@ def test_listen_stop_without_recording_returns_not_listening():
     assert client.post("/listen/stop").json() == {"ok": True, "action": "not_listening"}
 
 
+def test_listen_last_audio_returns_404_before_audio_is_ready():
+    session, _calls = make_listen_session()
+    client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
+
+    response = client.get("/listen/last-audio")
+
+    assert response.status_code == 404
+
+
 def test_listen_stop_processes_audio_with_stt_brain_and_tts():
     session, calls = make_listen_session()
     client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
@@ -146,11 +159,16 @@ def test_listen_stop_processes_audio_with_stt_brain_and_tts():
         time.sleep(0.01)
 
     status = client.get("/listen/status").json()
-    assert status == {"listening": False, "processing": False, "last_transcript": "kysymys", "last_answer": "vastaus"}
+    assert status == {"listening": False, "processing": False, "last_transcript": "kysymys", "last_answer": "vastaus", "audio_ready": True}
     assert calls["transcribe"][0][0] == b"wav bytes"
     assert calls["transcribe"][0][1].endswith(".wav")
     assert calls["brain"] == ["kysymys"]
-    assert calls["speak"] == ["vastaus"]
+    assert calls["synthesize_wav"] == ["vastaus"]
+
+    audio_response = client.get("/listen/last-audio")
+    assert audio_response.status_code == 200
+    assert audio_response.headers["content-type"] == "audio/wav"
+    assert audio_response.content == b"RIFF response wav"
 
 
 def test_status_returns_server_status():

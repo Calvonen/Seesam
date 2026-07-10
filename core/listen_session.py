@@ -52,6 +52,16 @@ class ListenSession:
         with self._lock:
             return self._last_audio
 
+    def process_audio(self, audio: bytes, filename: str | None) -> tuple[str, str]:
+        with self._lock:
+            self._processing = True
+            self._last_audio = None
+        try:
+            return self._transcribe_and_respond(audio, filename)
+        finally:
+            with self._lock:
+                self._processing = False
+
     def _finish_recording(self, process: subprocess.Popen, audio_path: Path) -> None:
         try:
             process.terminate()
@@ -60,14 +70,18 @@ class ListenSession:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=3)
-            transcript = self._transcribe(audio_path.read_bytes(), audio_path.name)
-            answer = self._brain_getter().respond(transcript)
-            with self._lock:
-                self._last_transcript, self._last_answer = transcript, answer
-            audio = self._synthesize_wav(answer)
-            with self._lock:
-                self._last_audio = audio
+            self._transcribe_and_respond(audio_path.read_bytes(), audio_path.name)
         finally:
             audio_path.unlink(missing_ok=True)
             with self._lock:
                 self._processing = False
+
+    def _transcribe_and_respond(self, audio: bytes, filename: str | None) -> tuple[str, str]:
+        transcript = self._transcribe(audio, filename)
+        answer = self._brain_getter().respond(transcript)
+        response_audio = self._synthesize_wav(answer)
+        with self._lock:
+            self._last_transcript = transcript
+            self._last_answer = answer
+            self._last_audio = response_audio
+        return transcript, answer

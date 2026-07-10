@@ -148,6 +148,39 @@ def test_listen_last_audio_returns_404_before_audio_is_ready():
     assert response.status_code == 404
 
 
+def test_listen_upload_processes_wav_and_makes_response_audio_available():
+    session, calls = make_listen_session()
+    client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
+
+    response = client.post(
+        "/listen/upload",
+        files={"file": ("esp.wav", b"ESP wav bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "action": "upload_processed",
+        "transcript": "kysymys",
+        "answer": "vastaus",
+        "audio_ready": True,
+    }
+    assert calls["transcribe"] == [(b"ESP wav bytes", "esp.wav")]
+    assert calls["brain"] == ["kysymys"]
+    assert calls["synthesize_wav"] == ["vastaus"]
+    assert client.get("/listen/status").json() == {
+        "listening": False,
+        "processing": False,
+        "last_transcript": "kysymys",
+        "last_answer": "vastaus",
+        "audio_ready": True,
+    }
+    audio_response = client.get("/listen/last-audio")
+    assert audio_response.status_code == 200
+    assert audio_response.headers["content-type"] == "audio/wav"
+    assert audio_response.content == b"RIFF response wav"
+
+
 def test_listen_stop_processes_audio_with_stt_brain_and_tts():
     session, calls = make_listen_session()
     client = TestClient(create_app(brain=FakeBrain(), listen_session=session))

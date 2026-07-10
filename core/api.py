@@ -52,6 +52,14 @@ class ListenStatusResponse(BaseModel):
     audio_ready: bool
 
 
+class ListenUploadResponse(BaseModel):
+    ok: bool
+    action: str
+    transcript: str
+    answer: str
+    audio_ready: bool
+
+
 def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
@@ -150,6 +158,14 @@ def create_app(
     @app.post("/listen/stop", response_model=ListenStartResponse)
     def listen_stop() -> ListenStartResponse:
         return ListenStartResponse(ok=True, action=app.state.listen_session.stop())
+
+    @app.post("/listen/upload", response_model=ListenUploadResponse)
+    async def listen_upload(file: UploadFile = File(...)) -> ListenUploadResponse:
+        try:
+            transcript, answer = app.state.listen_session.process_audio(await file.read(), file.filename)
+        finally:
+            await file.close()
+        return ListenUploadResponse(ok=True, action="upload_processed", transcript=transcript, answer=answer, audio_ready=True)
 
     @app.get("/listen/status", response_model=ListenStatusResponse)
     def listen_status() -> ListenStatusResponse:

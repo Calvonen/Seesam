@@ -1,3 +1,6 @@
+import time
+from pathlib import Path
+
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
@@ -7,6 +10,7 @@ from core import stt, tts
 from core import energyzen
 from core.brain import Brain
 from core.memory import Memory
+from core.listen_session import ListenSession
 from core.api import create_app
 
 
@@ -84,16 +88,69 @@ def test_health_returns_ok_with_local_system_fields():
     }
 
 
-def test_listen_start_returns_acknowledgement():
-    client = TestClient(create_app(brain=FakeBrain()))
+def make_listen_session():
+    calls = {"transcribe": [], "brain": [], "speak": []}
 
-    response = client.post("/listen/start")
+    class FakeProcess:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            Path(command[-1]).write_bytes(b"wav bytes")
+            self.terminated = False
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "action": "listen_start_requested",
-    }
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout):
+            return 0
+
+        def kill(self):
+            raise AssertionError("kill should not be needed")
+
+    class ListenBrain:
+        def respond(self, text):
+            calls["brain"].append(text)
+            return "vastaus"
+
+    def transcribe(audio, filename):
+        calls["transcribe"].append((audio, filename))
+        return "kysymys"
+
+    session = ListenSession(lambda: ListenBrain(), transcribe, calls["speak"].append, FakeProcess)
+    return session, calls
+
+
+def test_listen_start_starts_recording_and_second_start_is_idempotent():
+    session, _calls = make_listen_session()
+    client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
+
+    assert client.post("/listen/start").json() == {"ok": True, "action": "listening_started"}
+    assert client.post("/listen/start").json() == {"ok": True, "action": "already_listening"}
+    assert client.get("/listen/status").json()["listening"] is True
+
+
+def test_listen_stop_without_recording_returns_not_listening():
+    session, _calls = make_listen_session()
+    client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
+
+    assert client.post("/listen/stop").json() == {"ok": True, "action": "not_listening"}
+
+
+def test_listen_stop_processes_audio_with_stt_brain_and_tts():
+    session, calls = make_listen_session()
+    client = TestClient(create_app(brain=FakeBrain(), listen_session=session))
+    client.post("/listen/start")
+
+    assert client.post("/listen/stop").json() == {"ok": True, "action": "listen_stopped_processing"}
+    deadline = time.monotonic() + 2
+    while client.get("/listen/status").json()["processing"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    status = client.get("/listen/status").json()
+    assert status == {"listening": False, "processing": False, "last_transcript": "kysymys", "last_answer": "vastaus"}
+    assert calls["transcribe"][0][0] == b"wav bytes"
+    assert calls["transcribe"][0][1].endswith(".wav")
+    assert calls["brain"] == ["kysymys"]
+    assert calls["speak"] == ["vastaus"]
 
 
 def test_status_returns_server_status():

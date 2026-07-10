@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
 from core.brain import Brain
+from core.listen_session import ListenSession
 from core.specs import collect_system_specs
 from core.status import StatusCollector
 from core.system_status import SystemStatus
@@ -43,11 +44,19 @@ class ListenStartResponse(BaseModel):
     action: str
 
 
+class ListenStatusResponse(BaseModel):
+    listening: bool
+    processing: bool
+    last_transcript: str | None
+    last_answer: str | None
+
+
 def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
     specs_collector=collect_system_specs,
     system_status: SystemStatus | None = None,
+    listen_session: ListenSession | None = None,
 ) -> FastAPI:
     """Create the FastAPI app, optionally using an injected Brain for tests."""
     app = FastAPI(title="Seesam HTTP API")
@@ -60,6 +69,8 @@ def create_app(
         if app.state.brain is None:
             app.state.brain = Brain.from_environment()
         return app.state.brain
+
+    app.state.listen_session = listen_session or ListenSession(get_brain, stt.transcribe_audio, tts.speak)
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -132,8 +143,16 @@ def create_app(
 
     @app.post("/listen/start", response_model=ListenStartResponse)
     def listen_start() -> ListenStartResponse:
-        """Acknowledge a request to start listening without blocking the request."""
-        return ListenStartResponse(ok=True, action="listen_start_requested")
+        """Start push-to-talk recording without blocking the request."""
+        return ListenStartResponse(ok=True, action=app.state.listen_session.start())
+
+    @app.post("/listen/stop", response_model=ListenStartResponse)
+    def listen_stop() -> ListenStartResponse:
+        return ListenStartResponse(ok=True, action=app.state.listen_session.stop())
+
+    @app.get("/listen/status", response_model=ListenStatusResponse)
+    def listen_status() -> ListenStatusResponse:
+        return ListenStatusResponse(**app.state.listen_session.status())
 
     return app
 

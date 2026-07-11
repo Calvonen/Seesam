@@ -6,7 +6,7 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
-from core import stt, tts
+from core import api, stt, tts
 from core import energyzen
 from core.brain import Brain
 from core.memory import Memory
@@ -266,6 +266,49 @@ def test_system_specs_returns_server_hardware_specs():
         "gpu_name": "NVIDIA Test GPU",
         "local_ip": "192.168.1.10",
     }
+
+
+def test_system_shutdown_schedules_mocked_poweroff(monkeypatch):
+    timer_calls = []
+    shutdown_calls = []
+
+    class FakeTimer:
+        def __init__(self, delay, callback):
+            timer_calls.append((delay, callback))
+            self.callback = callback
+            self.daemon = False
+
+        def start(self):
+            self.callback()
+
+    monkeypatch.setattr(api.threading, "Timer", FakeTimer)
+    client = TestClient(
+        create_app(
+            brain=FakeBrain(),
+            shutdown_runner=lambda: shutdown_calls.append("poweroff"),
+            shutdown_delay_seconds=1.5,
+        ),
+        client=("192.168.1.25", 50000),
+    )
+
+    response = client.post("/system/shutdown")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "action": "shutdown_scheduled"}
+    assert len(timer_calls) == 1
+    assert timer_calls[0][0] == 1.5
+    assert shutdown_calls == ["poweroff"]
+
+
+def test_system_shutdown_rejects_public_network_client():
+    client = TestClient(
+        create_app(brain=FakeBrain(), shutdown_runner=lambda: None),
+        client=("8.8.8.8", 50000),
+    )
+
+    response = client.post("/system/shutdown")
+
+    assert response.status_code == 403
 
 
 def test_speak_returns_wav_audio(monkeypatch):

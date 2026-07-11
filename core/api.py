@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
+import subprocess
+import threading
+
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
@@ -60,12 +64,32 @@ class ListenUploadResponse(BaseModel):
     audio_ready: bool
 
 
+class ShutdownResponse(BaseModel):
+    ok: bool
+    action: str
+
+
+def _poweroff() -> None:
+    """Power off the host; kept separate so tests can inject a harmless runner."""
+    subprocess.run(["sudo", "/usr/bin/systemctl", "poweroff"], check=False)
+
+
+def _is_local_or_lan_address(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
 def create_app(
     brain: Brain | None = None,
     status_collector: StatusCollector | None = None,
     specs_collector=collect_system_specs,
     system_status: SystemStatus | None = None,
     listen_session: ListenSession | None = None,
+    shutdown_runner=_poweroff,
+    shutdown_delay_seconds: float = 1.0,
 ) -> FastAPI:
     """Create the FastAPI app, optionally using an injected Brain for tests."""
     app = FastAPI(title="Seesam HTTP API")
@@ -95,6 +119,18 @@ def create_app(
     def system_specs() -> dict[str, object]:
         """Return server hardware and OS specifications."""
         return app.state.specs_collector()
+
+    @app.post("/system/shutdown", response_model=ShutdownResponse)
+    def system_shutdown(request: Request) -> ShutdownResponse:
+        """Schedule host shutdown for callers connected from local/LAN networks."""
+        client_host = request.client.host if request.client is not None else ""
+        if not _is_local_or_lan_address(client_host):
+            raise HTTPException(status_code=403, detail="Shutdown is only available from local/LAN networks.")
+
+        timer = threading.Timer(shutdown_delay_seconds, shutdown_runner)
+        timer.daemon = True
+        timer.start()
+        return ShutdownResponse(ok=True, action="shutdown_scheduled")
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(request: Request) -> ChatResponse:

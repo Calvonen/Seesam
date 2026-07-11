@@ -26,10 +26,24 @@ AUDIO_OUTPUT_COMMAND_PHRASES = {
     "media paalle",
 }
 MEDIA_PLAYBACK_COMMAND_PHRASES = {
+    "käynnistä spotify",
+    "kaynnista spotify",
+    "avaa spotify",
+    "spotify päälle",
+    "spotify paalle",
+    "laita spotify päälle",
+    "laita spotify paalle",
+    "laitas spotify päälle",
+    "laitas spotify paalle",
+    "toista spotify",
     "soita spotify",
     "soita musiikkia",
-    "musiikki paalle",
+    "käynnistä musiikki",
+    "kaynnista musiikki",
+    "laita musiikki päälle",
+    "laita musiikki paalle",
     "musiikki päälle",
+    "musiikki paalle",
 }
 _pending_local_confirmation: CommandDefinition | None = None
 

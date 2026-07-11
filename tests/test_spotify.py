@@ -282,23 +282,35 @@ def test_spotify_play_intents_do_not_fall_through_to_fact_response(monkeypatch):
     )
     monkeypatch.setattr(spotify_commands.spotify_client, "play", lambda device_id=None: calls.append(("play", device_id)))
 
-    for command in [
-        "laita spotify päälle",
-        "spotify päälle",
-        "soita spotify",
-        "toista spotify",
+    commands = [
         "käynnistä spotify",
+        "kaynnista spotify",
+        "avaa spotify",
+        "spotify päälle",
+        "spotify paalle",
+        "laita spotify päälle",
+        "laita spotify paalle",
+        "laitas spotify päälle",
+        "laitas spotify paalle",
+        "toista spotify",
+        "soita spotify",
         "käynnistä musiikki",
+        "kaynnista musiikki",
+        "laita musiikki päälle",
+        "laita musiikki paalle",
         "musiikki päälle",
+        "musiikki paalle",
         "soita musiikkia",
         "jatka musiikkia",
         "jatka spotify",
         "jatka",
         "toista",
-    ]:
+    ]
+
+    for command in commands:
         assert spotify_commands.handle_spotify_command(command) == "Soitan Spotifystä."
 
-    assert len(calls) == 24
+    assert len(calls) == len(commands) * 2
 
 
 def test_spotify_start_aliases_work_like_play_commands(monkeypatch):

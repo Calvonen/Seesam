@@ -33,11 +33,14 @@ SPEAKER_POWER_ON_TIMEOUT_SECONDS = 5
 SEESAM_DEVICE_NAME = "Seesam"
 PLAY_COMMANDS = {
     "laita spotify paalle",
+    "laitas spotify paalle",
     "spotify paalle",
+    "avaa spotify",
     "soita spotify",
     "toista spotify",
     "kaynnista spotify",
     "kaynnista musiikki",
+    "laita musiikki paalle",
     "musiikki paalle",
     "soita musiikkia",
     "jatka musiikkia",

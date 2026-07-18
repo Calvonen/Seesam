@@ -68,12 +68,28 @@ def test_energyzen_clamps_calculated_showers_to_tank_range():
     assert energyzen.calculate_showers(5.0, 5.0) == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, "nollaan"),
+        (1, "yhteen"),
+        (2, "kahteen"),
+        (5.06, "viiteen"),
+        (5.6, "kuuteen"),
+        (8, "kahdeksaan"),
+        (11.4, "11"),
+    ],
+)
+def test_format_showers_uses_finnish_illative(value, expected):
+    assert energyzen._format_showers(value) == expected
+
+
 def test_energyzen_format_uses_calculated_showers_and_rounds_values():
     reading = energyzen.TankReading(top_temp=56.9, bottom_temp=27.7, showers=2.2, heating=False)
 
     assert (
         energyzen.format_reading(reading)
-        == "Varaajan yläosa on 57 astetta, alaosa 28 astetta. Lämmitys on pois päältä ja lämmintä vettä riittää arviolta 5 suihkuun."
+        == "Varaajan yläosa on 57 astetta, alaosa 28 astetta. Lämmitys on pois päältä ja lämmintä vettä riittää arviolta viiteen suihkuun."
     )
 
 
@@ -134,7 +150,7 @@ def test_brain_handles_energyzen_questions_without_ollama(monkeypatch, phrase):
     assert brain.local_command_name(phrase) == "energyzen"
     assert (
         brain.respond(phrase)
-        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta kuuteen suihkuun."
     )
     assert client.calls == []
 

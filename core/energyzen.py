@@ -16,6 +16,19 @@ DEFAULT_TIMEOUT_SECONDS = 5
 MIN_TANK_TEMPERATURE = 10.0
 FULL_TANK_AVERAGE_TEMPERATURE = 61.0
 SHOWERS_AT_FULL_TANK = 8.0
+SHOWER_COUNT_ILLATIVE = {
+    0: "nollaan",
+    1: "yhteen",
+    2: "kahteen",
+    3: "kolmeen",
+    4: "neljään",
+    5: "viiteen",
+    6: "kuuteen",
+    7: "seitsemään",
+    8: "kahdeksaan",
+    9: "yhdeksään",
+    10: "kymmeneen",
+}
 
 
 class EnergyZenError(RuntimeError):
@@ -138,4 +151,5 @@ def _format_temperature(value: float) -> str:
 
 
 def _format_showers(value: float) -> str:
-    return f"{value:.0f}"
+    rounded = f"{value:.0f}"
+    return SHOWER_COUNT_ILLATIVE.get(int(rounded), rounded)

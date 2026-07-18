@@ -706,7 +706,7 @@ def test_energyzen_hot_water_voice_variants_are_handled_without_ollama(monkeypat
     brain = Brain(client=client, personality="vastaa suomeksi")
     expected = (
         "Varaajan yläosa on 62 astetta, alaosa 50 astetta. "
-        "Lämmitys on päällä ja lämmintä vettä riittää arviolta 7 suihkuun."
+        "Lämmitys on päällä ja lämmintä vettä riittää arviolta seitsemään suihkuun."
     )
 
     for command in [
@@ -1045,7 +1045,7 @@ def test_energyzen_fuzzy_temperature_confirmation_yes_executes(monkeypatch):
     assert brain.respond("varajan pämpö") == "Tarkoititko kysyä varaajan lämpötilaa?"
     assert (
         brain.respond("juu")
-        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+        == "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta kuuteen suihkuun."
     )
     assert client.calls == []
 
@@ -1063,7 +1063,7 @@ def test_energyzen_fuzzy_hot_water_typo_executes_or_confirms(monkeypatch):
 
     assert (
         brain.respond("paljonk lämmintä vett")
-        == "Varaajan yläosa on 62 astetta, alaosa 50 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 7 suihkuun."
+        == "Varaajan yläosa on 62 astetta, alaosa 50 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta seitsemään suihkuun."
     )
     assert brain.respond("palonko lämmmitä vett") == "Tarkoititko kysyä varaajan lämpötilaa?"
     assert client.calls == []

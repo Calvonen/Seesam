@@ -512,7 +512,7 @@ def test_chat_handles_energyzen_command_locally(monkeypatch, capsys):
 
     assert response.status_code == 200
     assert response.json() == {
-        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta kuuteen suihkuun."
     }
     assert ollama.calls == []
     output = capsys.readouterr().out
@@ -547,7 +547,7 @@ def test_chat_routes_energyzen_locally_after_wrong_ai_context(monkeypatch, capsy
     assert first_response.json() == {"answer": "Mitä haluat sanoa varaajan?"}
     assert second_response.status_code == 200
     assert second_response.json() == {
-        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta kuuteen suihkuun."
     }
     assert len(ollama.calls) == 1
     assert brain.conversation_history == [
@@ -589,7 +589,7 @@ def test_chat_uses_environment_brain_for_energyzen_command(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta 6 suihkuun."
+        "answer": "Varaajan yläosa on 58 astetta, alaosa 43 astetta. Lämmitys on päällä ja lämmintä vettä riittää arviolta kuuteen suihkuun."
     }
     assert created_brains == [Brain]
     assert app.state.brain is brain

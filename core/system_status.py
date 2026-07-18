@@ -23,6 +23,15 @@ from core import tts
 
 GB = 1024**3
 VERSION = "local-file-memory-v1"
+DATE_QUESTION_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"\b(?:mikä|mika)\s+(?:päivä|paiva)\s+(?:tänään|tanaan|nyt)\s+on\b",
+        r"\b(?:mikä|mika)\s+(?:viikonpäivä|viikonpaiva)\s+(?:tänään|tanaan|nyt)\s+on\b",
+        r"\b(?:monesko|paljonko)\s+(?:päivä|paiva|päiväys|paivays)(?:\s+(?:tänään|tanaan|nyt))?\s+on\b",
+        r"\b(?:tämän|taman)\s+(?:päivän|paivan)\s+(?:päivämäärä|paivamaara)(?:n)?\b",
+    )
+)
 TIME_WORDS = {"aika", "kello", "kellonaika"}
 DATE_PHRASES = {
     "mikä päivä tänään on",
@@ -145,6 +154,11 @@ def has_any(words: set[str], candidates: set[str]) -> bool:
 
 def has_machine_context(words: set[str]) -> bool:
     return has_any(words, MACHINE_CONTEXT_WORDS)
+
+
+def is_date_question(normalized: str) -> bool:
+    """Return whether text asks for the current local date or weekday."""
+    return normalized in DATE_PHRASES or any(pattern.search(normalized) for pattern in DATE_QUESTION_PATTERNS)
 
 
 def is_memory_management_phrase(normalized: str) -> bool:
@@ -473,8 +487,8 @@ class SystemStatus:
         _, command_text = extract_leading_greeting(user_input)
         normalized = normalize_user_text(strip_wake_word_prefix(command_text))
         words = words_in(normalized)
-        if normalized in DATE_PHRASES:
-            return "time"
+        if is_date_question(normalized):
+            return "date"
         if normalized in TIME_DETAIL_PHRASES and self.lastApproximateTime is not None:
             return "time_details"
         if has_any(words, TIME_WORDS):
@@ -512,7 +526,7 @@ class SystemStatus:
     def debug_match_name(self, user_input: str) -> str:
         """Return status debug category for API logging."""
         match_kind = self.match_kind(user_input)
-        if match_kind in {"wake", "time", "time_details", "cpu", "gpu", "ram", "disk", "ollama", "details", "all_details"}:
+        if match_kind in {"wake", "date", "time", "time_details", "cpu", "gpu", "ram", "disk", "ollama", "details", "all_details"}:
             return match_kind
         return "none"
 
@@ -529,10 +543,11 @@ class SystemStatus:
 
         if match_kind == "wake":
             return wake_word_acknowledgement(user_input)
+        if match_kind == "date":
+            now = datetime.now().astimezone()
+            return with_greeting(f"Tänään on {tts.spoken_finnish_date(now)}.")
         if match_kind == "time":
             now = datetime.now().astimezone()
-            if normalized in DATE_PHRASES:
-                return with_greeting(f"Tänään on {tts.spoken_finnish_date(now)}.")
             if tts.is_approximate_finnish_time(now.minute):
                 self.lastApproximateTime = now
             else:

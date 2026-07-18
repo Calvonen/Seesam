@@ -1197,9 +1197,37 @@ def test_system_status_date_answer_uses_natural_finnish_date(monkeypatch):
     monkeypatch.setattr(system_status, "datetime", FixedDateTime)
     status = SystemStatus(started_at=0)
 
-    assert status.answer("mikä päivä tänään on") == "Tänään on keskiviikko kahdeksas heinäkuuta."
-    assert status.answer("päivämäärä") == "Tänään on keskiviikko kahdeksas heinäkuuta."
-    assert status.answer("mikä päivämäärä") == "Tänään on keskiviikko kahdeksas heinäkuuta."
+    date_questions = [
+        "Mikä päivä tänään on?",
+        "Kiitos hyvää. Mikä päivä tänään on?",
+        "Hei, mikä päivä tänään on?",
+        "Seesam, mikä päivä nyt on?",
+        "Mikä viikonpäivä tänään on?",
+        "Kertoisitko tämän päivän päivämäärän?",
+        "Paljonko päiväys on?",
+        "Monesko päivä tänään on?",
+        "Kiitos. Mika paiva tanaan on?",
+        "päivämäärä",
+        "mikä päivämäärä",
+    ]
+    for question in date_questions:
+        assert status.match_kind(question) == "date"
+        assert status.debug_match_name(question) == "date"
+        assert status.answer(question).endswith("Tänään on keskiviikko kahdeksas heinäkuuta.")
+
+
+def test_system_status_date_matcher_does_not_match_unrelated_day_phrases():
+    status = SystemStatus(started_at=0)
+
+    for phrase in [
+        "Millainen päivä sinulla oli?",
+        "Voinko mennä tänään uimaan?",
+        "Montako päivää jouluun on?",
+    ]:
+        assert status.match_kind(phrase) is None
+        assert status.answer(phrase) is None
+
+    assert status.match_kind("Mitä kello on?") == "time"
 
 
 def test_spoken_finnish_date_handles_first_and_twenty_first_days():

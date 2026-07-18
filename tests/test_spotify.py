@@ -604,7 +604,7 @@ def test_spotify_search_play_commands(monkeypatch):
         ("soita jotain jazzia", "jazzia", "playlist,track", "spotify:playlist:jazz"),
         ("laita jazzia soimaan", "jazzia", "playlist,track", "spotify:playlist:jazz"),
         ("soita soulia", "soulia", "playlist,track", "spotify:playlist:soul"),
-        ("soita jukka poika", "jukka poika", "track,artist,playlist", "spotify:track:jukka"),
+        ("soita jukka poika", "jukka poika", "artist", "spotify:artist:jukka"),
         ("soita artisti jukka poika", "jukka poika", "artist", "spotify:artist:jukka"),
         ("soita kappale silkkii", "silkkii", "track", "spotify:track:silkkii"),
     ]
@@ -620,6 +620,61 @@ def test_spotify_search_play_commands(monkeypatch):
             ("play_uri", uri, "seesam-id"),
         ])
     assert calls == expected_calls
+
+
+def test_plain_artist_search_prefers_artist_result_type(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+    result = {
+        "tracks": {"items": [{"name": "Benny Song", "uri": "spotify:track:first", "artists": [{"name": "Benny Rivers"}]}]},
+        "artists": {"items": [{"name": "Benny Rivers", "uri": "spotify:artist:benny"}]},
+    }
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "search", lambda query, types="track,artist,playlist", limit=5: calls.append(("search", query, types)) or result)
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: calls.append(("transfer", device_id, play)))
+    monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append(("play_uri", uri, device_id)))
+
+    for command in ("Soita Benny Rivers", "Soita artisti Benny Rivers", "Laita Benny Rivers soimaan"):
+        calls.clear()
+        assert spotify_commands.handle_spotify_command(command) == "Soitan Spotifystä: Benny Rivers."
+        assert calls == [("search", "benny rivers", "artist"), ("transfer", "seesam-id", False), ("play_uri", "spotify:artist:benny", "seesam-id")]
+
+
+def test_explicit_playlist_and_album_select_requested_result_type(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+    results = {
+        ("evening radio", "playlist"): {"playlists": {"items": [{"name": "Evening Radio", "uri": "spotify:playlist:evening"}]}},
+        ("northern lights", "album"): {"albums": {"items": [{"name": "Northern Lights", "uri": "spotify:album:northern"}]}},
+    }
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "search", lambda query, types="track,artist,playlist", limit=5: calls.append((query, types)) or results[(query, types)])
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: None)
+    monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append(uri))
+
+    assert spotify_commands.handle_spotify_command("soita soittolista Evening Radio") == "Soitan Spotifystä: Evening Radio."
+    assert spotify_commands.handle_spotify_command("soita albumi Northern Lights") == "Soitan Spotifystä: Northern Lights."
+    assert calls == [("evening radio", "playlist"), "spotify:playlist:evening", ("northern lights", "album"), "spotify:album:northern"]
+
+
+def test_uncertain_artist_confirmation_plays_artist_context(monkeypatch):
+    from spotify import spotify_commands
+
+    calls = []
+    result = {"artists": {"items": [{"name": "Benny Rivers", "uri": "spotify:artist:benny"}]}}
+    monkeypatch.setattr(spotify_commands, "ensure_default_media_output", lambda: AudioResult(True, "ok"))
+    monkeypatch.setattr(spotify_commands.spotify_client, "get_available_devices", lambda: [{"id": "seesam-id", "name": "Seesam"}])
+    monkeypatch.setattr(spotify_commands.spotify_client, "search", lambda query, types="track,artist,playlist", limit=5: result)
+    monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: None)
+    monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append(uri))
+
+    assert spotify_commands.handle_spotify_command("soita artisti Benny Revers") == "Tarkoititko artistia Benny Rivers?"
+    assert spotify_commands.handle_spotify_command("kyllä") == "Soitan artistia Benny Rivers."
+    assert calls == ["spotify:artist:benny"]
 
 
 def test_spotify_search_play_ignores_home_control_commands(monkeypatch):
@@ -711,8 +766,8 @@ def test_spotify_speech_variants_accept_matching_playlist(monkeypatch):
     for index, (command, query) in enumerate(commands):
         response = spotify_commands.handle_spotify_command(command)
         if index < 2:
-            assert response == "Tarkoititko Benny Riversiä?"
-            assert spotify_commands.handle_spotify_command("kyllä") == "Soitan Benny Riversiä."
+            assert response == "Tarkoititko artistia Benny Rivers?"
+            assert spotify_commands.handle_spotify_command("kyllä") == "Soitan artistia Benny Rivers."
         else:
             assert response == "Soitan Spotifystä: Benny Rivers."
 
@@ -748,7 +803,7 @@ def test_pending_spotify_search_result_can_be_rejected(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "search", lambda query, types="track,artist,playlist", limit=5: result)
     monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda *args, **kwargs: calls.append("play"))
 
-    assert spotify_commands.handle_spotify_command("Soita Spotifyissa Benny Revers Radio") == "Tarkoititko Benny Riversiä?"
+    assert spotify_commands.handle_spotify_command("Soita Spotifyissa Benny Revers Radio") == "Tarkoititko artistia Benny Rivers?"
     assert spotify_commands.handle_spotify_command("ei") == "Selvä, en soita sitä."
     assert calls == []
     assert spotify_commands._pending_spotify_search_result is None
@@ -787,9 +842,9 @@ def test_new_spotify_search_replaces_pending_search_result(monkeypatch):
     monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: None)
     monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append(uri))
 
-    assert spotify_commands.handle_spotify_command("soita spotifyissa benny revers radio") == "Tarkoititko Benny Riversiä?"
-    assert spotify_commands.handle_spotify_command("soita spotifyissa johnny revers radio") == "Tarkoititko Johnny Riversiä?"
-    assert spotify_commands.handle_spotify_command("juu") == "Soitan Johnny Riversiä."
+    assert spotify_commands.handle_spotify_command("soita spotifyissa benny revers radio") == "Tarkoititko artistia Benny Rivers?"
+    assert spotify_commands.handle_spotify_command("soita spotifyissa johnny revers radio") == "Tarkoititko artistia Johnny Rivers?"
+    assert spotify_commands.handle_spotify_command("juu") == "Soitan artistia Johnny Rivers."
     assert calls == ["spotify:artist:johnny"]
 
 
@@ -823,7 +878,7 @@ def test_playlist_with_radio_in_its_name_uses_normal_playlist_playback(monkeypat
     monkeypatch.setattr(spotify_commands.spotify_client, "transfer_playback", lambda device_id, play=False: None)
     monkeypatch.setattr(spotify_commands.spotify_client, "play_uri", lambda uri, device_id=None: calls.append(uri))
 
-    assert spotify_commands.handle_spotify_command("soita spotifyissa Benny Rivers Radio") == "Soitan Spotifystä: Benny Rivers Radio."
+    assert spotify_commands.handle_spotify_command("soita soittolista Benny Rivers Radio") == "Soitan Spotifystä: Benny Rivers Radio."
     assert calls == ["spotify:playlist:benny-radio"]
 
 

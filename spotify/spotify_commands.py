@@ -314,6 +314,21 @@ def _search_play_response(request: SpotifySearchRequest) -> str:
     except (SpotifyClientError, SpotifyAuthError) as error:
         return str(error)
     suggestion = _best_search_result(result, request)
+    # A two-word request may be either a multi-word artist name or an
+    # unmarked artist + track request. Prefer a real artist result, and only
+    # fall back to track field matching when the artist search found none.
+    if suggestion is None and request.types == "artist":
+        track_request = SpotifySearchRequest(
+            query=request.query,
+            types="track",
+            artist_hint=request.artist_hint,
+            track_hint=request.track_hint,
+        )
+        try:
+            track_result = spotify_client.search(query, types="track", limit=5)
+        except (SpotifyClientError, SpotifyAuthError) as error:
+            return str(error)
+        suggestion = _best_search_result(track_result, track_request)
     if suggestion is None or suggestion.score < SPOTIFY_SEARCH_CONFIRM_MATCH_THRESHOLD:
         for fallback_query in _fallback_track_queries(request):
             try:
@@ -340,7 +355,7 @@ def _search_play_response(request: SpotifySearchRequest) -> str:
     if suggestion.artist_name and suggestion.track_name:
         return f"Tarkoititko {_finnish_genitive_name(suggestion.artist_name)} kappaletta {suggestion.track_name}?"
     if suggestion.uri.startswith("spotify:artist:"):
-        return f"Tarkoititko {_finnish_artist_partitive(suggestion.name)}?"
+        return f"Tarkoititko artistia {suggestion.name}?"
     return f"Tarkoititko {suggestion.name}?"
 
 
@@ -351,8 +366,8 @@ def _play_search_result_response(result: PendingSpotifySearchResult, confirmed: 
         success_message = f"Soitan {_finnish_genitive_name(result.artist_name)} kappaleen {result.track_name}."
     else:
         success_message = (
-        f"Soitan {_finnish_artist_partitive(result.name)}."
-        if confirmed and result.uri.startswith("spotify:artist:")
+            f"Soitan artistia {result.name}."
+            if confirmed and result.uri.startswith("spotify:artist:")
             else f"Soitan Spotifystä: {result.name}."
         )
     return _run_spotify_action(
@@ -579,6 +594,8 @@ def _search_play_request(words: list[str], original_text: str = "") -> SpotifySe
     track_hint: str | None = None
     had_track_marker = bool(set(query_words) & {"kappale", "biisi"})
     had_artist_marker = "artisti" in query_words
+    had_playlist_marker = bool(set(query_words) & {"soittolista", "playlist"})
+    had_album_marker = "albumi" in query_words
     comma_parts = re.split(r"[,;]", original_text, maxsplit=1)
     if len(comma_parts) == 2:
         left_words = _normalize(comma_parts[0]).split()
@@ -598,10 +615,10 @@ def _search_play_request(words: list[str], original_text: str = "") -> SpotifySe
         artist_index = query_words.index("artistilta")
         track_hint = " ".join(query_words[1:artist_index]).strip() or None
         artist_hint = " ".join(query_words[artist_index + 1:]).strip() or None
-    query_words = [word for word in query_words if word not in {"kappale", "biisi", "artisti", "artistilta"}]
+    query_words = [word for word in query_words if word not in {"kappale", "biisi", "artisti", "artistilta", "soittolista", "playlist", "albumi"}]
 
     radio_words = {"radio", "radiota", "radioon", "radioo"}
-    if query_words and query_words[-1] in radio_words:
+    if query_words and query_words[-1] in radio_words and not had_playlist_marker and not had_album_marker:
         query_words = query_words[:-1]
     query_words = [word for word in query_words if word not in {"jotain", "soimaan"}]
     query = " ".join(query_words).strip()
@@ -614,10 +631,14 @@ def _search_play_request(words: list[str], original_text: str = "") -> SpotifySe
     looks_compound = looks_compound or len(query_words) >= 4
     if looks_compound or had_track_marker:
         types = "track"
-    elif had_artist_marker:
-        types = "artist"
+    elif had_playlist_marker:
+        types = "playlist"
+    elif had_album_marker:
+        types = "album"
     elif any(word in GENRE_WORDS for word in query_words):
         types = "playlist,track"
+    elif had_artist_marker or len(query_words) == 2:
+        types = "artist"
     else:
         types = "track,artist,playlist"
     return SpotifySearchRequest(query=query, types=types, artist_hint=artist_hint, track_hint=track_hint)

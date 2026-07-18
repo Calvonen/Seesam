@@ -10,7 +10,6 @@
       "name": "Steljes audio NS3",
       "type": "bluetooth",
       "mac": "04:FE:A1:46:BA:AA",
-      "sink": "bluez_output.04_FE_A1_46_BA_AA.1",
       "volume": 0.6,
       "aliases": [
         "steljes",

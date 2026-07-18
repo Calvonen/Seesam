@@ -17,9 +17,6 @@ SINK_NOT_ACTIVATED_MESSAGE = (
     "Bluetooth-yhteys on päällä, mutta äänilaite ei aktivoitunut. "
     "Kokeile käynnistää Seesamin äänipalvelut tai reboot."
 )
-BLUETOOTH_READY_TIMEOUT_SECONDS = 5.0
-BLUETOOTH_POLL_INTERVAL_SECONDS = 0.25
-BLUETOOTH_CONNECT_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -99,32 +96,38 @@ def _ensure_bluetooth_output(device_id: str, device: dict[str, Any]) -> AudioRes
         return AudioResult(False, f"Bluetooth-laitteelta '{name}' puuttuu MAC-osoite.", device_id)
 
     volume = _format_volume(device.get("volume", 0.40))
-    sink_name = str(device.get("sink") or f"bluez_output.{mac.replace(':', '_')}.1")
 
     power_result = _run(["bluetoothctl", "power", "on"])
     if not power_result.success:
         return AudioResult(False, f"Bluetoothin käynnistys epäonnistui: {power_result.message}", device_id)
 
     info_result = _run(["bluetoothctl", "info", mac])
-    connected = _is_connected(info_result)
-    sink_id = _find_available_sink(sink_name) if connected else None
-
-    for attempt in range(BLUETOOTH_CONNECT_ATTEMPTS):
-        if connected and sink_id is not None:
-            break
+    connected = info_result.success and "Connected: yes" in info_result.message
+    if not connected:
         connect_result = _run(["bluetoothctl", "connect", mac])
-        connected, sink_id = _wait_for_bluetooth_output(mac, sink_name)
-        if connected and sink_id is not None:
-            break
-        if attempt + 1 == BLUETOOTH_CONNECT_ATTEMPTS and not connect_result.success:
+        if not connect_result.success:
             if _is_sleeping_speaker_error(connect_result.message):
                 return AudioResult(False, SPEAKERS_SLEEPING_MESSAGE, device_id)
             return AudioResult(False, f"Laitteeseen {name} yhdistäminen epäonnistui: {connect_result.message}", device_id)
+        connected = True
 
-    if not connected:
-        return AudioResult(False, SPEAKERS_SLEEPING_MESSAGE, device_id)
+    time.sleep(3)
+
+    status_result = _run(["wpctl", "status"])
+    if not status_result.success:
+        return AudioResult(False, f"Äänilaitteiden listaus epäonnistui: {status_result.message}", device_id)
+
+    sink_lines = _sink_lines(status_result.message)
+    sink_id = _find_sink_id(status_result.message, name)
     if sink_id is None:
-        return AudioResult(False, SINK_NOT_ACTIVATED_MESSAGE, device_id)
+        if connected:
+            return AudioResult(False, SINK_NOT_ACTIVATED_MESSAGE, device_id)
+        seen = "\n".join(sink_lines) if sink_lines else "ei sink-rivejä"
+        return AudioResult(
+            False,
+            f"Äänilaitetta '{name}' ei löytynyt wpctl status -tulosteen Sinks-osiosta. Sink-rivit:\n{seen}",
+            device_id,
+        )
 
     default_result = _run(["wpctl", "set-default", sink_id])
     if not default_result.success:
@@ -135,32 +138,6 @@ def _ensure_bluetooth_output(device_id: str, device: dict[str, Any]) -> AudioRes
         return AudioResult(False, f"Äänenvoimakkuuden asetus epäonnistui: {volume_result.message}", device_id, sink_id)
 
     return AudioResult(True, "Steljes-kaiuttimet yhdistetty.", device_id, sink_id)
-
-
-def _is_connected(info_result: AudioResult) -> bool:
-    return info_result.success and "Connected: yes" in info_result.message
-
-
-def _find_available_sink(sink_name: str) -> str | None:
-    status_result = _run(["wpctl", "status", "-n"])
-    if not status_result.success:
-        return None
-    return _find_sink_id(status_result.message, sink_name)
-
-
-def _wait_for_bluetooth_output(mac: str, sink_name: str) -> tuple[bool, str | None]:
-    poll_count = max(1, int(BLUETOOTH_READY_TIMEOUT_SECONDS / BLUETOOTH_POLL_INTERVAL_SECONDS) + 1)
-    connected = False
-    for poll_index in range(poll_count):
-        info_result = _run(["bluetoothctl", "info", mac])
-        connected = _is_connected(info_result)
-        if connected:
-            sink_id = _find_available_sink(sink_name)
-            if sink_id is not None:
-                return True, sink_id
-        if poll_index + 1 < poll_count:
-            time.sleep(BLUETOOTH_POLL_INTERVAL_SECONDS)
-    return connected, None
 
 
 def _is_sleeping_speaker_error(message: str) -> bool:

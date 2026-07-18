@@ -226,8 +226,8 @@ def test_ensure_default_media_output_uses_media_output_default(monkeypatch, tmp_
 
     def fake_run(command):
         calls.append(command)
-        if command == ["wpctl", "status"]:
-            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "status", "-n"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. bluez_output.04_FE_A1_46_BA_AA.1")
         return audio_manager.AudioResult(True, "Connected: yes")
 
     monkeypatch.setattr(audio_manager, "CONFIG_PATH", config_path)
@@ -264,13 +264,18 @@ def test_audio_manager_connects_bluetooth_output_and_selects_sink(monkeypatch, t
         encoding="utf-8",
     )
     calls = []
+    connected = False
 
     def fake_run(command):
+        nonlocal connected
         calls.append(command)
         if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
-            return audio_manager.AudioResult(True, "Connected: no")
-        if command == ["wpctl", "status"]:
-            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n  * 39. Steljes audio NS3 [vol: 0.50]")
+            return audio_manager.AudioResult(True, f"Connected: {'yes' if connected else 'no'}")
+        if command == ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"]:
+            connected = True
+            return audio_manager.AudioResult(True, "Connection successful")
+        if command == ["wpctl", "status", "-n"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n  * 39. bluez_output.04_FE_A1_46_BA_AA.1 [vol: 0.50]")
         return audio_manager.AudioResult(True, "ok")
 
     monkeypatch.setattr(audio_manager, "_run", fake_run)
@@ -286,7 +291,8 @@ def test_audio_manager_connects_bluetooth_output_and_selects_sink(monkeypatch, t
         ["bluetoothctl", "power", "on"],
         ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"],
         ["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"],
-        ["wpctl", "status"],
+        ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"],
+        ["wpctl", "status", "-n"],
         ["wpctl", "set-default", "39"],
         ["wpctl", "set-volume", "39", "0.40"],
     ]
@@ -320,8 +326,8 @@ def test_audio_manager_skips_connect_when_bluetooth_is_already_connected(monkeyp
         calls.append(command)
         if command == ["bluetoothctl", "info", "04:FE:A1:46:BA:AA"]:
             return audio_manager.AudioResult(True, "Connected: yes")
-        if command == ["wpctl", "status"]:
-            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "status", "-n"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. bluez_output.04_FE_A1_46_BA_AA.1")
         return audio_manager.AudioResult(True, "ok")
 
     monkeypatch.setattr(audio_manager, "_run", fake_run)
@@ -370,6 +376,7 @@ def test_audio_manager_returns_clear_message_when_connect_times_out(monkeypatch,
     result = audio_manager.ensure_media_output(path=config_path)
 
     assert result.success is False
+    assert calls.count(["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"]) == 2
     assert result.message == audio_manager.SPEAKERS_SLEEPING_MESSAGE
     assert ["bluetoothctl", "remove", "04:FE:A1:46:BA:AA"] not in calls
 
@@ -409,6 +416,7 @@ def test_audio_manager_returns_clear_message_when_device_is_not_available(monkey
     result = audio_manager.ensure_media_output(path=config_path)
 
     assert result.success is False
+    assert calls.count(["bluetoothctl", "connect", "04:FE:A1:46:BA:AA"]) == 2
     assert result.message == audio_manager.SPEAKERS_SLEEPING_MESSAGE
     assert not any(command[:2] == ["bluetoothctl", "remove"] for command in calls)
 
@@ -468,8 +476,8 @@ def test_audio_manager_fails_when_setting_default_or_volume_fails(monkeypatch, t
     )
 
     def default_fails(command):
-        if command == ["wpctl", "status"]:
-            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "status", "-n"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. bluez_output.04_FE_A1_46_BA_AA.1")
         if command == ["wpctl", "set-default", "39"]:
             return audio_manager.AudioResult(False, "set-default failed")
         return audio_manager.AudioResult(True, "Connected: yes")
@@ -483,8 +491,8 @@ def test_audio_manager_fails_when_setting_default_or_volume_fails(monkeypatch, t
     assert "Oletusulostulon asetus epäonnistui" in result.message
 
     def volume_fails(command):
-        if command == ["wpctl", "status"]:
-            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. Steljes audio NS3")
+        if command == ["wpctl", "status", "-n"]:
+            return audio_manager.AudioResult(True, "Audio\n  Sinks:\n    39. bluez_output.04_FE_A1_46_BA_AA.1")
         if command == ["wpctl", "set-volume", "39", "0.40"]:
             return audio_manager.AudioResult(False, "set-volume failed")
         return audio_manager.AudioResult(True, "Connected: yes")
@@ -521,7 +529,7 @@ def test_audio_manager_returns_clear_error_when_sink_is_missing(monkeypatch, tmp
     )
 
     def fake_run(command):
-        if command == ["wpctl", "status"]:
+        if command == ["wpctl", "status", "-n"]:
             return audio_manager.AudioResult(True, "Sinks:\n  41. Built-in Audio")
         return audio_manager.AudioResult(True, "Connected: yes")
 
